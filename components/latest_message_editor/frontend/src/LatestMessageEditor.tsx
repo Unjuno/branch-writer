@@ -4,11 +4,16 @@ import { ComponentProps, Streamlit } from "streamlit-component-lib"
 type InterventionAction = "regenerate_from_here" | "insert_and_continue"
 
 type InterventionEvent = {
+  requestId: string
   action: InterventionAction
   messageId: string
   selectionStart: number
   selectionEnd: number
   insertion?: string
+}
+
+function createRequestId(action: InterventionAction, messageId: string): string {
+  return `${messageId}:${action}:${Date.now()}:${Math.random().toString(36).slice(2)}`
 }
 
 function LatestMessageEditor(props: ComponentProps) {
@@ -48,6 +53,7 @@ function LatestMessageEditor(props: ComponentProps) {
 
   const emit = (action: InterventionAction) => {
     const event: InterventionEvent = {
+      requestId: createRequestId(action, messageId),
       action,
       messageId,
       selectionStart,
@@ -65,9 +71,19 @@ function LatestMessageEditor(props: ComponentProps) {
     setInsertion(event.target.value)
   }
 
+  const selectedLength = Math.max(0, selectionEnd - selectionStart)
+  const canInsert = insertion.trim().length > 0
+
   return (
-    <div className="branch-writer-editor">
-      <label className="branch-writer-label">Latest assistant message</label>
+    <section className="branch-writer-editor" aria-label="Latest assistant intervention editor">
+      <div className="branch-writer-header">
+        <div>
+          <div className="branch-writer-kicker">Editable latest assistant message</div>
+          <h3>介入ポイントを選ぶ</h3>
+        </div>
+        <div className="branch-writer-badge">latest only</div>
+      </div>
+
       <textarea
         ref={textareaRef}
         className="branch-writer-textarea"
@@ -78,41 +94,48 @@ function LatestMessageEditor(props: ComponentProps) {
         onKeyUp={updateSelection}
         onSelect={updateSelection}
         onMouseUp={updateSelection}
-        rows={Math.min(Math.max(content.split("\n").length + 2, 8), 24)}
+        rows={Math.min(Math.max(content.split("\n").length + 2, 9), 26)}
       />
 
-      <div className="branch-writer-selection">
-        selectionStart: <code>{selectionStart}</code> / selectionEnd: <code>{selectionEnd}</code>
+      <div className="branch-writer-meta-row">
+        <span>cut: <code>{selectionStart}</code></span>
+        <span>end: <code>{selectionEnd}</code></span>
+        <span>selected: <code>{selectedLength}</code></span>
       </div>
 
-      <div className="branch-writer-actions">
+      <div className="branch-writer-action-panel">
         <button
+          className="branch-writer-primary"
           type="button"
           disabled={disabled}
           onClick={() => emit("regenerate_from_here")}
         >
-          ここから再生成
+          <span>ここから再生成</span>
+          <small>選択地点以降を破棄して続ける</small>
         </button>
-      </div>
 
-      <div className="branch-writer-insert-block">
-        <textarea
-          className="branch-writer-insertion"
-          value={insertion}
-          disabled={disabled}
-          onChange={onInsertionChange}
-          placeholder="ここに挿入する文を入力"
-          rows={3}
-        />
-        <button
-          type="button"
-          disabled={disabled || insertion.length === 0}
-          onClick={() => emit("insert_and_continue")}
-        >
-          入力して続ける
-        </button>
+        <div className="branch-writer-insert-card">
+          <label htmlFor="branch-writer-insertion">入力して続ける</label>
+          <textarea
+            id="branch-writer-insertion"
+            className="branch-writer-insertion"
+            value={insertion}
+            disabled={disabled}
+            onChange={onInsertionChange}
+            placeholder="ここに作者側の一文を入れる"
+            rows={3}
+          />
+          <button
+            className="branch-writer-secondary"
+            type="button"
+            disabled={disabled || !canInsert}
+            onClick={() => emit("insert_and_continue")}
+          >
+            挿入して続きを生成
+          </button>
+        </div>
       </div>
-    </div>
+    </section>
   )
 }
 
