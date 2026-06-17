@@ -13,8 +13,6 @@ from branch_writer.config import (
 )
 from branch_writer.messages import ChatMessage, to_openai_messages
 
-REQUEST_TIMEOUT_SECONDS = 600.0
-
 
 class LlmError(RuntimeError):
     """Raised when local LLM generation fails."""
@@ -51,16 +49,17 @@ def _post_chat_completion(
     }
 
     url = _chat_completions_url(settings)
+    timeout_seconds = settings.request_timeout_seconds
 
     try:
         response = httpx.post(
             url,
             headers=_headers(settings),
             json=payload,
-            timeout=REQUEST_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
         )
     except httpx.TimeoutException as exc:
-        raise LlmError(f"LLM request timed out after {REQUEST_TIMEOUT_SECONDS:.0f}s: {url}") from exc
+        raise LlmError(f"LLM request timed out after {timeout_seconds:.0f}s: {url}") from exc
     except httpx.RequestError as exc:
         raise LlmError(f"LLM request failed: {exc}") from exc
 
