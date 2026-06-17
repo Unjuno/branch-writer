@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 import streamlit as st
 
@@ -115,6 +116,7 @@ def render_manual_intervention_fallback(message: ChatMessage) -> dict[str, Any] 
     with col1:
         if st.button("ここから再生成", key=f"manual-regenerate-{message.id}"):
             return {
+                "requestId": str(uuid4()),
                 "action": "regenerate_from_here",
                 "messageId": message.id,
                 "selectionStart": int(selection_start),
@@ -123,6 +125,7 @@ def render_manual_intervention_fallback(message: ChatMessage) -> dict[str, Any] 
     with col2:
         if st.button("入力して続ける", key=f"manual-insert-{message.id}"):
             return {
+                "requestId": str(uuid4()),
                 "action": "insert_and_continue",
                 "messageId": message.id,
                 "selectionStart": int(selection_start),
@@ -172,33 +175,63 @@ def handle_user_prompt(prompt: str) -> None:
         set_generating(st.session_state, False)
 
 
-def handle_intervention_event(event: dict[str, Any]) -> None:
-    """Apply an intervention event emitted by the latest-message editor."""
+def _event_fingerprint(event: dict[str, Any]) -> str:
+    return repr(
+        (
+            event.get("action"),
+            event.get("messageId"),
+            event.get("selectionStart"),
+            event.get("selectionEnd"),
+            event.get("insertion") or "",
+        )
+    )
+
+
+def _event_request_id(event: dict[str, Any]) -> str:
+    request_id = event.get("requestId")
+    if isinstance(request_id, str) and request_id:
+        return request_id
+    return _event_fingerprint(event)
+
+
+def handle_intervention_event(event: dict[str, Any]) -> bool:
+    """Apply an intervention event emitted by the latest-message editor.
+
+    Returns True only when a new event was actually processed. Streamlit
+    components keep returning their last value across reruns, so duplicate
+    events must be ignored without triggering another rerun.
+    """
+    request_id = _event_request_id(event)
+    if st.session_state.get("last_intervention_request_id") == request_id:
+        return False
+
+    st.session_state["last_intervention_request_id"] = request_id
+
     messages: list[ChatMessage] = st.session_state["messages"]
     settings: LlmSettings = st.session_state["llm_settings"]
 
     if not messages:
-        return
+        return False
 
     latest = messages[-1]
     message_id = event.get("messageId")
     if not isinstance(message_id, str) or not is_intervenable(messages, message_id):
         set_error(st.session_state, "このメッセージは既に凍結されているため、介入できません。")
-        return
+        return True
 
     if latest.id != message_id:
         set_error(st.session_state, "介入対象が最新Assistantメッセージではありません。")
-        return
+        return True
 
     action = event.get("action")
     if action not in VALID_INTERVENTION_ACTIONS:
         set_error(st.session_state, f"未知の介入操作です: {action}")
-        return
+        return True
 
     selection_start = event.get("selectionStart")
     if not isinstance(selection_start, int):
         set_error(st.session_state, "selectionStart が不正です。")
-        return
+        return True
 
     insertion = event.get("insertion") or ""
     before_content = latest.content
@@ -207,7 +240,7 @@ def handle_intervention_event(event: dict[str, Any]) -> None:
         validate_selection_start(before_content, selection_start)
     except (TypeError, ValueError) as exc:
         set_error(st.session_state, str(exc))
-        return
+        return True
 
     set_error(st.session_state, None)
     set_generating(st.session_state, True)
@@ -238,6 +271,8 @@ def handle_intervention_event(event: dict[str, Any]) -> None:
         set_error(st.session_state, str(exc))
     finally:
         set_generating(st.session_state, False)
+
+    return True
 
 
 def undo_last_intervention() -> None:
@@ -271,8 +306,9 @@ def main() -> None:
 
     event = render_messages()
     if event:
-        handle_intervention_event(event)
-        st.rerun()
+        processed = handle_intervention_event(event)
+        if processed:
+            st.rerun()
 
     prompt = st.chat_input("メッセージを入力")
     if prompt:
