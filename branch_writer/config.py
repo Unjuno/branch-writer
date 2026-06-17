@@ -10,9 +10,12 @@ DEFAULT_API_KEY = ""
 DEFAULT_MODEL = ""
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_MAX_TOKENS = 4096
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 180.0
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 MIN_MAX_TOKENS = 1
+MIN_REQUEST_TIMEOUT_SECONDS = 5.0
+MAX_REQUEST_TIMEOUT_SECONDS = 900.0
 
 
 @dataclass(slots=True)
@@ -24,6 +27,7 @@ class LlmSettings:
     model: str = DEFAULT_MODEL
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
+    request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS
 
 
 def default_llm_settings() -> LlmSettings:
@@ -70,6 +74,12 @@ def validate_llm_settings(settings: LlmSettings) -> list[str]:
 
     if settings.max_tokens < MIN_MAX_TOKENS:
         errors.append("Max Tokens must be greater than or equal to 1")
+
+    if not MIN_REQUEST_TIMEOUT_SECONDS <= settings.request_timeout_seconds <= MAX_REQUEST_TIMEOUT_SECONDS:
+        errors.append(
+            "Request Timeout must be between "
+            f"{MIN_REQUEST_TIMEOUT_SECONDS:.0f} and {MAX_REQUEST_TIMEOUT_SECONDS:.0f} seconds"
+        )
 
     return errors
 
