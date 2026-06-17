@@ -1,6 +1,7 @@
 from branch_writer.config import (
     DEFAULT_BASE_URL,
     DEFAULT_MAX_TOKENS,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_TEMPERATURE,
     LlmSettings,
     default_llm_settings,
@@ -16,6 +17,8 @@ def test_default_llm_settings() -> None:
     assert settings.temperature == DEFAULT_TEMPERATURE
     assert settings.max_tokens == DEFAULT_MAX_TOKENS
     assert settings.max_tokens == 4096
+    assert settings.request_timeout_seconds == DEFAULT_REQUEST_TIMEOUT_SECONDS
+    assert settings.request_timeout_seconds == 180.0
 
 
 def test_empty_base_url_is_invalid() -> None:
@@ -48,6 +51,18 @@ def test_max_tokens_less_than_one_is_invalid() -> None:
     assert "Max Tokens must be greater than or equal to 1" in validate_llm_settings(settings)
 
 
+def test_request_timeout_too_low_is_invalid() -> None:
+    settings = LlmSettings(model="model", request_timeout_seconds=1)
+
+    assert any("Request Timeout must be between" in error for error in validate_llm_settings(settings))
+
+
+def test_request_timeout_too_high_is_invalid() -> None:
+    settings = LlmSettings(model="model", request_timeout_seconds=1200)
+
+    assert any("Request Timeout must be between" in error for error in validate_llm_settings(settings))
+
+
 def test_valid_settings_have_no_errors() -> None:
     settings = LlmSettings(
         base_url="http://localhost:11434/v1",
@@ -55,6 +70,7 @@ def test_valid_settings_have_no_errors() -> None:
         model="local-model",
         temperature=0.7,
         max_tokens=4096,
+        request_timeout_seconds=180,
     )
 
     assert validate_llm_settings(settings) == []
