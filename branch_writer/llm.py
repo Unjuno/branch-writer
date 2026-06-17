@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-from branch_writer.config import LlmSettings, validate_llm_settings
+from branch_writer.config import (
+    LlmSettings,
+    normalize_openai_base_url,
+    validate_llm_settings,
+)
 from branch_writer.messages import ChatMessage, to_openai_messages
 
 
@@ -15,7 +19,7 @@ class LlmError(RuntimeError):
 def _build_client(settings: LlmSettings) -> OpenAI:
     """Build an OpenAI-compatible client for a local endpoint."""
     return OpenAI(
-        base_url=settings.base_url,
+        base_url=normalize_openai_base_url(settings.base_url),
         api_key=settings.api_key or "branch-writer-local-key",
     )
 
