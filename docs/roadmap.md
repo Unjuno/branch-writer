@@ -34,19 +34,19 @@ v0の最優先目標は次である。
 
 ### TODO
 
-- [ ] `README.md` を作成する
-- [ ] `.gitignore` を作成する
-- [ ] `LICENSE` を作成する
-- [ ] `requirements.txt` を作成する
-- [ ] Pythonパッケージ用ディレクトリ `branch_writer/` を作成する
-- [ ] テスト用ディレクトリ `tests/` を作成する
-- [ ] GitHub Actions用ディレクトリ `.github/workflows/` を作成する
+- [x] `README.md` を作成する
+- [x] `.gitignore` を作成する
+- [x] `LICENSE` を作成する
+- [x] `requirements.txt` を作成する
+- [x] Pythonパッケージ用ディレクトリ `branch_writer/` を作成する
+- [x] テスト用ディレクトリ `tests/` を作成する
+- [x] GitHub Actions用ディレクトリ `.github/workflows/` を作成する
 
 ### 完了条件
 
-- [ ] リポジトリ直下の基本ファイルが揃っている
-- [ ] `.env` 系の秘密情報がgit管理対象外になっている
-- [ ] `pip install -r requirements.txt` の準備ができている
+- [x] リポジトリ直下の基本ファイルが揃っている
+- [x] `.env` 系の秘密情報がgit管理対象外になっている
+- [x] `pip install -r requirements.txt` の準備ができている
 
 ---
 
@@ -58,7 +58,7 @@ UIに依存しないコアロジックを先に作る。
 
 ### TODO
 
-- [ ] `branch_writer/__init__.py` を作成する
+- [x] `branch_writer/__init__.py` を作成する
 - [ ] `branch_writer/messages.py` を作成する
 - [ ] `branch_writer/intervention.py` を作成する
 - [ ] `branch_writer/config.py` を作成する
@@ -111,7 +111,7 @@ UIに依存しないコアロジックを先に作る。
 - [ ] `tests/test_messages.py` を作成する
 - [ ] `tests/test_intervention.py` を作成する
 - [ ] `tests/test_config.py` を作成する
-- [ ] `pytest` を `requirements.txt` に追加する
+- [x] `pytest` を `requirements.txt` に追加する
 
 ### `test_messages.py`
 
@@ -375,13 +375,13 @@ GitHub Actionsで最低限の品質確認を自動化する。
 
 ### TODO
 
-- [ ] プロダクト概要を書く
-- [ ] v0の機能を書く
-- [ ] セットアップ手順を書く
+- [x] プロダクト概要を書く
+- [x] v0の機能を書く
+- [x] セットアップ手順を書く
 - [ ] ローカルLLM起動例を書く
-- [ ] Streamlit起動手順を書く
-- [ ] LLM設定項目を書く
-- [ ] APIキーをコミットしない注意を書く
+- [x] Streamlit起動手順を書く
+- [x] LLM設定項目を書く
+- [x] APIキーをコミットしない注意を書く
 - [ ] 既知の制限を書く
 
 ### 完了条件
@@ -396,8 +396,8 @@ GitHub Actionsで最低限の品質確認を自動化する。
 
 ユーザーがローカルでcloneして実機テストする前に、以下を満たす。
 
-- [ ] `git clone` できる
-- [ ] `pip install -r requirements.txt` できる
+- [x] `git clone` できる
+- [x] `pip install -r requirements.txt` できる
 - [ ] `streamlit run app.py` で起動できる
 - [ ] サイドバーでLLM設定を入力できる
 - [ ] 通常チャット送信ができる
