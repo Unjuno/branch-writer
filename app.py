@@ -7,7 +7,11 @@ from typing import Any
 import streamlit as st
 
 from branch_writer.config import LlmSettings, validate_llm_settings
-from branch_writer.intervention import insert_and_continue, regenerate_from_here
+from branch_writer.intervention import (
+    insert_and_continue,
+    regenerate_from_here,
+    validate_selection_start,
+)
 from branch_writer.llm import (
     LlmError,
     generate_chat_response,
@@ -28,6 +32,8 @@ from branch_writer.state import (
     set_generating,
 )
 from components.latest_message_editor import component_available, latest_message_editor
+
+VALID_INTERVENTION_ACTIONS = {"regenerate_from_here", "insert_and_continue"}
 
 
 def render_sidebar() -> None:
@@ -185,6 +191,10 @@ def handle_intervention_event(event: dict[str, Any]) -> None:
         return
 
     action = event.get("action")
+    if action not in VALID_INTERVENTION_ACTIONS:
+        set_error(st.session_state, f"未知の介入操作です: {action}")
+        return
+
     selection_start = event.get("selectionStart")
     if not isinstance(selection_start, int):
         set_error(st.session_state, "selectionStart が不正です。")
@@ -192,6 +202,13 @@ def handle_intervention_event(event: dict[str, Any]) -> None:
 
     insertion = event.get("insertion") or ""
     before_content = latest.content
+
+    try:
+        validate_selection_start(before_content, selection_start)
+    except (TypeError, ValueError) as exc:
+        set_error(st.session_state, str(exc))
+        return
+
     set_error(st.session_state, None)
     set_generating(st.session_state, True)
 
@@ -206,11 +223,8 @@ def handle_intervention_event(event: dict[str, Any]) -> None:
 
         if action == "regenerate_from_here":
             result = regenerate_from_here(before_content, selection_start, continuation)
-        elif action == "insert_and_continue":
-            result = insert_and_continue(before_content, selection_start, insertion, continuation)
         else:
-            set_error(st.session_state, f"未知の介入操作です: {action}")
-            return
+            result = insert_and_continue(before_content, selection_start, insertion, continuation)
 
         latest.content = result.next_content
         push_undo_snapshot(
