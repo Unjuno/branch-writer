@@ -43,7 +43,7 @@ v0はローカルLLMを前提にします。
 | API Key | empty / `ollama` / `lm-studio` |
 | Model | `qwen2.5:7b` / `llama3.1:8b` |
 | Temperature | `0.7` |
-| Max Tokens | `512` |
+| Max Tokens | `4096` |
 
 ## Planned Tech Stack
 
@@ -163,7 +163,7 @@ API Base URL: http://localhost:11434/v1
 API Key: empty or any local placeholder
 Model: your-local-model-name
 Temperature: 0.7
-Max Tokens: 512
+Max Tokens: 4096
 ```
 
 ## Security Notes
