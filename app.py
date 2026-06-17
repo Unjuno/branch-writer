@@ -11,6 +11,7 @@ from branch_writer.config import LlmSettings, validate_llm_settings
 from branch_writer.intervention import (
     insert_and_continue,
     regenerate_from_here,
+    strip_continuation_overlap,
     validate_selection_start,
 )
 from branch_writer.llm import (
@@ -56,46 +57,12 @@ def render_sidebar() -> None:
     is_generating = bool(st.session_state["is_generating"])
 
     st.sidebar.header("LLM Settings")
-    settings.base_url = st.sidebar.text_input(
-        "API Base URL",
-        value=settings.base_url,
-        disabled=is_generating,
-    )
-    settings.api_key = st.sidebar.text_input(
-        "API Key",
-        value=settings.api_key,
-        type="password",
-        disabled=is_generating,
-    )
-    settings.model = st.sidebar.text_input(
-        "Model",
-        value=settings.model,
-        disabled=is_generating,
-    )
-    settings.temperature = st.sidebar.slider(
-        "Temperature",
-        min_value=0.0,
-        max_value=2.0,
-        value=float(settings.temperature),
-        step=0.1,
-        disabled=is_generating,
-    )
-    settings.max_tokens = st.sidebar.number_input(
-        "Max Tokens",
-        min_value=1,
-        max_value=32768,
-        value=int(settings.max_tokens),
-        step=1,
-        disabled=is_generating,
-    )
-    settings.request_timeout_seconds = st.sidebar.number_input(
-        "Request Timeout Seconds",
-        min_value=5,
-        max_value=900,
-        value=int(settings.request_timeout_seconds),
-        step=5,
-        disabled=is_generating,
-    )
+    settings.base_url = st.sidebar.text_input("API Base URL", value=settings.base_url, disabled=is_generating)
+    settings.api_key = st.sidebar.text_input("API Key", value=settings.api_key, type="password", disabled=is_generating)
+    settings.model = st.sidebar.text_input("Model", value=settings.model, disabled=is_generating)
+    settings.temperature = st.sidebar.slider("Temperature", min_value=0.0, max_value=2.0, value=float(settings.temperature), step=0.1, disabled=is_generating)
+    settings.max_tokens = st.sidebar.number_input("Max Tokens", min_value=1, max_value=32768, value=int(settings.max_tokens), step=1, disabled=is_generating)
+    settings.request_timeout_seconds = st.sidebar.number_input("Request Timeout Seconds", min_value=5, max_value=900, value=int(settings.request_timeout_seconds), step=5, disabled=is_generating)
 
     st.sidebar.divider()
     st.session_state["render_message_limit"] = st.sidebar.number_input(
@@ -112,10 +79,7 @@ def render_sidebar() -> None:
         st.sidebar.warning("\n".join(errors))
 
     st.sidebar.divider()
-    if st.sidebar.button(
-        "Undo last intervention",
-        disabled=is_generating or not st.session_state["undo_stack"],
-    ):
+    if st.sidebar.button("Undo last intervention", disabled=is_generating or not st.session_state["undo_stack"]):
         undo_last_intervention()
         st.rerun()
 
@@ -134,13 +98,12 @@ def render_latest_assistant_message(message: ChatMessage) -> dict[str, Any] | No
     """Render the latest assistant message and return an intervention event."""
     with st.chat_message("assistant"):
         if component_available():
-            event = latest_message_editor(
+            return latest_message_editor(
                 message_id=message.id,
                 content=message.content,
                 disabled=st.session_state["is_generating"],
                 key=f"latest-message-editor-{message.id}",
             )
-            return event
 
         st.markdown(message.content)
         st.info(
@@ -163,12 +126,7 @@ def render_manual_intervention_fallback(message: ChatMessage) -> dict[str, Any] 
         key=f"manual-selection-{message.id}",
         disabled=disabled,
     )
-    insertion = st.text_area(
-        "挿入する文",
-        value="",
-        key=f"manual-insertion-{message.id}",
-        disabled=disabled,
-    )
+    insertion = st.text_area("挿入する文", value="", key=f"manual-insertion-{message.id}", disabled=disabled)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -261,15 +219,7 @@ def handle_user_prompt(prompt: str) -> None:
 
 
 def _event_fingerprint(event: dict[str, Any]) -> str:
-    return repr(
-        (
-            event.get("action"),
-            event.get("messageId"),
-            event.get("selectionStart"),
-            event.get("selectionEnd"),
-            event.get("insertion") or "",
-        )
-    )
+    return repr((event.get("action"), event.get("messageId"), event.get("selectionStart"), event.get("selectionEnd"), event.get("insertion") or ""))
 
 
 def _event_request_id(event: dict[str, Any]) -> str:
@@ -280,12 +230,7 @@ def _event_request_id(event: dict[str, Any]) -> str:
 
 
 def handle_intervention_event(event: dict[str, Any]) -> bool:
-    """Apply an intervention event emitted by the latest-message editor.
-
-    Returns True only when a new event was actually processed. Streamlit
-    components keep returning their last value across reruns, so duplicate
-    events must be ignored without triggering another rerun.
-    """
+    """Apply an intervention event emitted by the latest-message editor."""
     if st.session_state["is_generating"]:
         return False
 
@@ -350,17 +295,19 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
                 insertion=effective_insertion,
                 settings=settings,
             )
-            continuation = ""
+            raw_continuation = ""
+            clean_continuation = ""
             for chunk in chunks:
-                continuation += chunk
-                latest.content = base_content + continuation
+                raw_continuation += chunk
+                clean_continuation = strip_continuation_overlap(base_content, raw_continuation)
+                latest.content = base_content + clean_continuation
                 placeholder.markdown(latest.content + CURSOR)
             placeholder.markdown(latest.content)
 
         if action == "regenerate_from_here":
-            result = regenerate_from_here(before_content, selection_start, continuation)
+            result = regenerate_from_here(before_content, selection_start, clean_continuation)
         else:
-            result = insert_and_continue(before_content, selection_start, insertion, continuation)
+            result = insert_and_continue(before_content, selection_start, insertion, clean_continuation)
 
         latest.content = result.next_content
         latest.status = "complete"
