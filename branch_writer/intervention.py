@@ -34,6 +34,24 @@ def split_at_selection(content: str, selection_start: int) -> tuple[str, str]:
     return content[:selection_start], content[selection_start:]
 
 
+def strip_continuation_overlap(base: str, continuation: str, max_overlap: int = 256) -> str:
+    """Remove duplicated boundary text between base and continuation.
+
+    Local LLMs often repeat the final character or phrase of the provided prefix
+    when asked to continue text. If ``base`` ends with text that ``continuation``
+    starts with, remove the duplicated continuation prefix before concatenation.
+    """
+    if not base or not continuation:
+        return continuation
+
+    max_len = min(len(base), len(continuation), max_overlap)
+    for overlap_len in range(max_len, 0, -1):
+        if base[-overlap_len:] == continuation[:overlap_len]:
+            return continuation[overlap_len:]
+
+    return continuation
+
+
 def regenerate_from_here(
     content: str,
     selection_start: int,
@@ -41,13 +59,14 @@ def regenerate_from_here(
 ) -> InterventionResult:
     """Discard content after selection_start and append a new continuation."""
     prefix, discarded = split_at_selection(content, selection_start)
-    next_content = prefix + continuation
+    clean_continuation = strip_continuation_overlap(prefix, continuation)
+    next_content = prefix + clean_continuation
     return InterventionResult(
         next_content=next_content,
         prefix=prefix,
         discarded=discarded,
         insertion="",
-        continuation=continuation,
+        continuation=clean_continuation,
     )
 
 
@@ -59,11 +78,13 @@ def insert_and_continue(
 ) -> InterventionResult:
     """Insert user text at selection_start and append a new continuation."""
     prefix, discarded = split_at_selection(content, selection_start)
-    next_content = prefix + insertion + continuation
+    base = prefix + insertion
+    clean_continuation = strip_continuation_overlap(base, continuation)
+    next_content = base + clean_continuation
     return InterventionResult(
         next_content=next_content,
         prefix=prefix,
         discarded=discarded,
         insertion=insertion,
-        continuation=continuation,
+        continuation=clean_continuation,
     )
