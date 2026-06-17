@@ -59,44 +59,44 @@ UIに依存しないコアロジックを先に作る。
 ### TODO
 
 - [x] `branch_writer/__init__.py` を作成する
-- [ ] `branch_writer/messages.py` を作成する
-- [ ] `branch_writer/intervention.py` を作成する
-- [ ] `branch_writer/config.py` を作成する
-- [ ] `branch_writer/state.py` を作成する
+- [x] `branch_writer/messages.py` を作成する
+- [x] `branch_writer/intervention.py` を作成する
+- [x] `branch_writer/config.py` を作成する
+- [x] `branch_writer/state.py` を作成する
 
 ### `messages.py`
 
-- [ ] `ChatMessage` を定義する
-- [ ] `MessageRole` を定義する
-- [ ] `MessageStatus` を定義する
-- [ ] `is_intervenable()` を実装する
-- [ ] `append_user_message()` を実装する
-- [ ] `append_assistant_message()` を実装する
+- [x] `ChatMessage` を定義する
+- [x] `MessageRole` を定義する
+- [x] `MessageStatus` を定義する
+- [x] `is_intervenable()` を実装する
+- [x] `append_user_message()` を実装する
+- [x] `append_assistant_message()` を実装する
 
 ### `intervention.py`
 
-- [ ] `regenerate_from_here()` を実装する
-- [ ] `insert_and_continue()` を実装する
-- [ ] `validate_selection_start()` を実装する
-- [ ] `prefix` / `discarded` の計算を分離する
+- [x] `regenerate_from_here()` を実装する
+- [x] `insert_and_continue()` を実装する
+- [x] `validate_selection_start()` を実装する
+- [x] `prefix` / `discarded` の計算を分離する
 
 ### `config.py`
 
-- [ ] `LlmSettings` を定義する
-- [ ] デフォルト設定を定義する
-- [ ] `validate_llm_settings()` を実装する
+- [x] `LlmSettings` を定義する
+- [x] デフォルト設定を定義する
+- [x] `validate_llm_settings()` を実装する
 
 ### `state.py`
 
-- [ ] session state 初期化関数を実装する
-- [ ] Undo stack 初期化を実装する
-- [ ] 生成中フラグ初期化を実装する
+- [x] session state 初期化関数を実装する
+- [x] Undo stack 初期化を実装する
+- [x] 生成中フラグ初期化を実装する
 
 ### 完了条件
 
 - [ ] Streamlitなしでコアロジックをimportできる
-- [ ] 最新Assistantだけ介入可能と判定できる
-- [ ] selectionStartから正しくprefix/discardedを作れる
+- [x] 最新Assistantだけ介入可能と判定できる
+- [x] selectionStartから正しくprefix/discardedを作れる
 
 ---
 
@@ -108,40 +108,40 @@ UIに依存しないコアロジックを先に作る。
 
 ### TODO
 
-- [ ] `tests/test_messages.py` を作成する
-- [ ] `tests/test_intervention.py` を作成する
-- [ ] `tests/test_config.py` を作成する
+- [x] `tests/test_messages.py` を作成する
+- [x] `tests/test_intervention.py` を作成する
+- [x] `tests/test_config.py` を作成する
 - [x] `pytest` を `requirements.txt` に追加する
 
 ### `test_messages.py`
 
-- [ ] 最新Assistantは介入可能
-- [ ] 過去Assistantは介入不可
-- [ ] Userメッセージは介入不可
-- [ ] 空履歴は介入不可
-- [ ] error状態のAssistantは介入不可
+- [x] 最新Assistantは介入可能
+- [x] 過去Assistantは介入不可
+- [x] Userメッセージは介入不可
+- [x] 空履歴は介入不可
+- [x] error状態のAssistantは介入不可
 
 ### `test_intervention.py`
 
-- [ ] `regenerate_from_here()` の正常系
-- [ ] `insert_and_continue()` の正常系
-- [ ] `selectionStart == 0`
-- [ ] `selectionStart == len(content)`
-- [ ] `selectionStart < 0` はエラー
-- [ ] `selectionStart > len(content)` はエラー
+- [x] `regenerate_from_here()` の正常系
+- [x] `insert_and_continue()` の正常系
+- [x] `selectionStart == 0`
+- [x] `selectionStart == len(content)`
+- [x] `selectionStart < 0` はエラー
+- [x] `selectionStart > len(content)` はエラー
 
 ### `test_config.py`
 
-- [ ] デフォルト設定を検証する
-- [ ] base_url空文字を検証する
-- [ ] model空文字を検証する
-- [ ] temperature範囲を検証する
-- [ ] max_tokens範囲を検証する
+- [x] デフォルト設定を検証する
+- [x] base_url空文字を検証する
+- [x] model空文字を検証する
+- [x] temperature範囲を検証する
+- [x] max_tokens範囲を検証する
 
 ### 完了条件
 
 - [ ] `pytest` がローカルで通る
-- [ ] UIなしで介入ロジックの安全性を確認できる
+- [x] UIなしで介入ロジックの安全性を確認できる
 
 ---
 
@@ -153,21 +153,21 @@ UIに依存しないコアロジックを先に作る。
 
 ### TODO
 
-- [ ] `app.py` を作成する
-- [ ] `st.set_page_config()` を設定する
-- [ ] session state 初期化を呼び出す
-- [ ] `st.chat_message` で履歴表示する
-- [ ] `st.chat_input` で通常送信を受け取る
-- [ ] Userメッセージを履歴に追加する
-- [ ] ダミーAssistant応答を履歴に追加する
-- [ ] 最新Assistantだけ特殊表示できるように表示経路を分離する
+- [x] `app.py` を作成する
+- [x] `st.set_page_config()` を設定する
+- [x] session state 初期化を呼び出す
+- [x] `st.chat_message` で履歴表示する
+- [x] `st.chat_input` で通常送信を受け取る
+- [x] Userメッセージを履歴に追加する
+- [x] Assistant応答を履歴に追加する
+- [x] 最新Assistantだけ特殊表示できるように表示経路を分離する
 
 ### 完了条件
 
 - [ ] `streamlit run app.py` で起動できる
 - [ ] 通常チャット入力ができる
-- [ ] 入力内容が履歴に残る
-- [ ] ダミーAssistant応答が表示される
+- [x] 入力内容が履歴に残る
+- [x] Assistant応答が表示される
 
 ---
 
@@ -179,23 +179,23 @@ OpenAI互換ローカルLLM APIと接続する。
 
 ### TODO
 
-- [ ] `branch_writer/llm.py` を作成する
-- [ ] OpenAI互換APIへリクエストする関数を実装する
-- [ ] サイドバーにLLM設定UIを追加する
-- [ ] API Base URLを設定できるようにする
-- [ ] API Keyを設定できるようにする
-- [ ] Modelを設定できるようにする
-- [ ] Temperatureを設定できるようにする
-- [ ] Max Tokensを設定できるようにする
-- [ ] 通常チャット生成をダミー応答からLLM応答へ置き換える
-- [ ] 接続失敗時のエラー表示を実装する
+- [x] `branch_writer/llm.py` を作成する
+- [x] OpenAI互換APIへリクエストする関数を実装する
+- [x] サイドバーにLLM設定UIを追加する
+- [x] API Base URLを設定できるようにする
+- [x] API Keyを設定できるようにする
+- [x] Modelを設定できるようにする
+- [x] Temperatureを設定できるようにする
+- [x] Max Tokensを設定できるようにする
+- [x] 通常チャット生成をダミー応答からLLM応答へ置き換える
+- [x] 接続失敗時のエラー表示を実装する
 
 ### 完了条件
 
 - [ ] ローカルLLMへ通常チャットを送信できる
 - [ ] ローカルLLMから応答を受け取れる
-- [ ] 接続失敗時にUI上でエラーが表示される
-- [ ] APIキーがgitに保存されない
+- [x] 接続失敗時にUI上でエラーが表示される
+- [x] APIキーがgitに保存されない
 
 ---
 
@@ -207,16 +207,16 @@ OpenAI互換ローカルLLM APIと接続する。
 
 ### TODO
 
-- [ ] `render_frozen_message()` を作る
-- [ ] `render_latest_assistant_message()` を作る
-- [ ] 最新Assistantかどうかの判定を表示層で使う
-- [ ] 過去メッセージはStreamlit標準表示にする
-- [ ] 最新Assistantだけ別関数で表示する
+- [x] `render_frozen_message()` を作る
+- [x] `render_latest_assistant_message()` を作る
+- [x] 最新Assistantかどうかの判定を表示層で使う
+- [x] 過去メッセージはStreamlit標準表示にする
+- [x] 最新Assistantだけ別関数で表示する
 
 ### 完了条件
 
-- [ ] 最新Assistantだけ表示経路が分離されている
-- [ ] custom component導入前でも通常表示できる
+- [x] 最新Assistantだけ表示経路が分離されている
+- [x] custom component導入前でも通常表示できる
 
 ---
 
@@ -228,21 +228,21 @@ React/TypeScriptのStreamlit custom componentを導入する。
 
 ### TODO
 
-- [ ] `components/latest_message_editor/` を作成する
-- [ ] Python wrapper `components/latest_message_editor/__init__.py` を作成する
-- [ ] frontend `package.json` を作成する
-- [ ] frontend `tsconfig.json` を作成する
-- [ ] `LatestMessageEditor.tsx` を作成する
-- [ ] `index.tsx` を作成する
-- [ ] Pythonから `messageId` と `content` を渡せるようにする
-- [ ] React側で本文を表示する
-- [ ] React側からPythonへダミーイベントを返す
+- [x] `components/latest_message_editor/` を作成する
+- [x] Python wrapper `components/latest_message_editor/__init__.py` を作成する
+- [x] frontend `package.json` を作成する
+- [x] frontend `tsconfig.json` を作成する
+- [x] `LatestMessageEditor.tsx` を作成する
+- [x] `index.tsx` を作成する
+- [x] Pythonから `messageId` と `content` を渡せるようにする
+- [x] React側で本文を表示する
+- [x] React側からPythonへダミーイベントを返す
 
 ### 完了条件
 
 - [ ] Streamlitからcustom componentを呼べる
-- [ ] 最新Assistant本文がReact側に表示される
-- [ ] Python側でcomponent返却値を受け取れる
+- [x] 最新Assistant本文がReact側に表示される
+- [x] Python側でcomponent返却値を受け取れる
 
 ---
 
@@ -254,18 +254,18 @@ React/TypeScriptのStreamlit custom componentを導入する。
 
 ### TODO
 
-- [ ] React側の本文表示を `textarea` ベースにする
-- [ ] `selectionStart` を取得する
-- [ ] `selectionEnd` を取得する
-- [ ] カーソル移動時に選択値を保持する
-- [ ] 範囲選択時に選択値を保持する
-- [ ] Python側へ `selectionStart` / `selectionEnd` を返す
+- [x] React側の本文表示を `textarea` ベースにする
+- [x] `selectionStart` を取得する
+- [x] `selectionEnd` を取得する
+- [x] カーソル移動時に選択値を保持する
+- [x] 範囲選択時に選択値を保持する
+- [x] Python側へ `selectionStart` / `selectionEnd` を返す
 
 ### 完了条件
 
 - [ ] カーソル位置をPython側で確認できる
 - [ ] 範囲選択の開始・終了をPython側で確認できる
-- [ ] selectionStartを介入処理に渡せる
+- [x] selectionStartを介入処理に渡せる
 
 ---
 
@@ -277,21 +277,21 @@ React/TypeScriptのStreamlit custom componentを導入する。
 
 ### TODO
 
-- [ ] componentに「ここから再生成」ボタンを追加する
-- [ ] `regenerate_from_here` イベントを返す
-- [ ] Python側で対象メッセージが介入可能か確認する
-- [ ] `prefix = content[:selectionStart]` を作る
-- [ ] discarded suffixをLLM文脈から除外する
-- [ ] LLMへ介入生成を投げる
-- [ ] 最新Assistant内容を `prefix + continuation` に置き換える
-- [ ] Undo snapshotを保存する
+- [x] componentに「ここから再生成」ボタンを追加する
+- [x] `regenerate_from_here` イベントを返す
+- [x] Python側で対象メッセージが介入可能か確認する
+- [x] `prefix = content[:selectionStart]` を作る
+- [x] discarded suffixをLLM文脈から除外する
+- [x] LLMへ介入生成を投げる
+- [x] 最新Assistant内容を `prefix + continuation` に置き換える
+- [x] Undo snapshotを保存する
 
 ### 完了条件
 
 - [ ] 最新Assistantの途中から再生成できる
-- [ ] 破棄したsuffixが生成文脈に含まれない
-- [ ] 介入後も最新Assistantとして扱われる
-- [ ] Undo可能な状態になる
+- [x] 破棄したsuffixが生成文脈に含まれない
+- [x] 介入後も最新Assistantとして扱われる
+- [x] Undo可能な状態になる
 
 ---
 
@@ -303,23 +303,23 @@ React/TypeScriptのStreamlit custom componentを導入する。
 
 ### TODO
 
-- [ ] componentに「入力して続ける」ボタンを追加する
-- [ ] 挿入文入力欄を表示する
-- [ ] `insert_and_continue` イベントを返す
-- [ ] Python側で対象メッセージが介入可能か確認する
-- [ ] `prefix = content[:selectionStart]` を作る
-- [ ] `prefix + insertion` を生成文脈にする
-- [ ] discarded suffixをLLM文脈から除外する
-- [ ] LLMへ介入生成を投げる
-- [ ] 最新Assistant内容を `prefix + insertion + continuation` に置き換える
-- [ ] Undo snapshotを保存する
+- [x] componentに「入力して続ける」ボタンを追加する
+- [x] 挿入文入力欄を表示する
+- [x] `insert_and_continue` イベントを返す
+- [x] Python側で対象メッセージが介入可能か確認する
+- [x] `prefix = content[:selectionStart]` を作る
+- [x] `prefix + insertion` を生成文脈にする
+- [x] discarded suffixをLLM文脈から除外する
+- [x] LLMへ介入生成を投げる
+- [x] 最新Assistant内容を `prefix + insertion + continuation` に置き換える
+- [x] Undo snapshotを保存する
 
 ### 完了条件
 
 - [ ] 任意地点にユーザー文を挿入できる
 - [ ] 挿入文の後をLLMが生成できる
-- [ ] 破棄したsuffixが生成文脈に含まれない
-- [ ] Undo可能な状態になる
+- [x] 破棄したsuffixが生成文脈に含まれない
+- [x] Undo可能な状態になる
 
 ---
 
@@ -331,17 +331,17 @@ React/TypeScriptのStreamlit custom componentを導入する。
 
 ### TODO
 
-- [ ] UndoボタンをUIに追加する
-- [ ] Undo stackから直前snapshotを取り出す
-- [ ] 対象メッセージが最新Assistantか確認する
-- [ ] 最新Assistantのcontentをbefore_contentへ戻す
-- [ ] Undo失敗時のエラー表示を実装する
+- [x] UndoボタンをUIに追加する
+- [x] Undo stackから直前snapshotを取り出す
+- [x] 対象メッセージが最新Assistantか確認する
+- [x] 最新Assistantのcontentをbefore_contentへ戻す
+- [x] Undo失敗時のエラー表示を実装する
 
 ### 完了条件
 
 - [ ] 直前の「ここから再生成」を取り消せる
 - [ ] 直前の「入力して続ける」を取り消せる
-- [ ] 最新Assistantが変わっている場合はUndoしない
+- [x] 最新Assistantが変わっている場合はUndoしない
 
 ---
 
@@ -353,16 +353,17 @@ GitHub Actionsで最低限の品質確認を自動化する。
 
 ### TODO
 
-- [ ] `.github/workflows/ci.yml` を作成する
-- [ ] Pythonをセットアップする
-- [ ] 依存関係をインストールする
-- [ ] `pytest` を実行する
-- [ ] 必要に応じてfrontendの型チェックを追加する
+- [x] `.github/workflows/ci.yml` を作成する
+- [x] Pythonをセットアップする
+- [x] 依存関係をインストールする
+- [x] `pytest` を実行する
+- [x] frontendのビルドチェックを追加する
 
 ### 完了条件
 
 - [ ] push時にCIが走る
 - [ ] pytestがCI上で通る
+- [ ] frontend buildがCI上で通る
 - [ ] 失敗時に原因が追える
 
 ---
@@ -378,17 +379,17 @@ GitHub Actionsで最低限の品質確認を自動化する。
 - [x] プロダクト概要を書く
 - [x] v0の機能を書く
 - [x] セットアップ手順を書く
-- [ ] ローカルLLM起動例を書く
+- [x] ローカルLLM起動例を書く
 - [x] Streamlit起動手順を書く
 - [x] LLM設定項目を書く
 - [x] APIキーをコミットしない注意を書く
-- [ ] 既知の制限を書く
+- [x] 既知の制限を書く
 
 ### 完了条件
 
-- [ ] READMEだけでローカル起動手順が分かる
-- [ ] ローカルLLMのBase URL / Model設定が分かる
-- [ ] v0でできること・できないことが分かる
+- [x] READMEだけでローカル起動手順が分かる
+- [x] ローカルLLMのBase URL / Model設定が分かる
+- [x] v0でできること・できないことが分かる
 
 ---
 
@@ -399,16 +400,16 @@ GitHub Actionsで最低限の品質確認を自動化する。
 - [x] `git clone` できる
 - [x] `pip install -r requirements.txt` できる
 - [ ] `streamlit run app.py` で起動できる
-- [ ] サイドバーでLLM設定を入力できる
-- [ ] 通常チャット送信ができる
+- [x] サイドバーでLLM設定を入力できる
+- [x] 通常チャット送信ができる
 - [ ] ローカルLLMから応答を受け取れる
-- [ ] 最新Assistantメッセージだけ介入UIが出る
+- [x] 最新Assistantメッセージだけ介入UIが出る
 - [ ] 任意地点から「ここから再生成」できる
 - [ ] 任意地点から「入力して続ける」できる
 - [ ] 直前の介入をUndoできる
 - [ ] `pytest` が通る
 - [ ] GitHub Actions CIが通る
-- [ ] READMEに起動手順がある
+- [x] READMEに起動手順がある
 
 ---
 
@@ -439,7 +440,7 @@ Branch Writer v0 は、以下を満たした時点で完了とする。
 - [ ] 過去メッセージは編集不可である
 - [ ] pytestが通る
 - [ ] CIが通る
-- [ ] READMEに実行手順がある
+- [x] READMEに実行手順がある
 
 ---
 
