@@ -23,6 +23,9 @@ def test_initialize_state_sets_defaults() -> None:
     assert state["last_error"] is None
     assert state["last_intervention_request_id"] is None
     assert state["render_message_limit"] == 80
+    assert state["available_models"] == []
+    assert state["insertion_log"] == []
+    assert state["reuse_insertion"] is None
 
 
 def test_initialize_state_preserves_existing_values() -> None:

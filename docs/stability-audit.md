@@ -138,25 +138,24 @@ Relevant file:
 
 ## 3. Remaining Risks
 
-## 3.1 Synchronous LLM generation
+## 3.1 Normal chat is now non-blocking
 
-Generation still runs synchronously in the Streamlit request cycle. This is acceptable for v0 but can still feel heavy with slow models.
+Normal chat generation now runs via a non-blocking generator that yields one chunk per `st.rerun()`. This keeps the UI responsive and allows intervention even while streaming.
 
-Possible future improvement:
+However:
+- Intervention continuation (`handle_intervention_event`) still uses synchronous streaming.
+- Cancelling an ongoing generation via intervention is clean, but the transition may briefly flicker the UI.
 
-- streaming output
-- background worker
-- cancel generation button
+## 3.2 Context usage display is now implemented
 
-## 3.2 LLM context can grow indefinitely
+The sidebar shows:
+- Input tokens (estimated) + output headroom + total context limit
+- Color-coded progress bar (yellow at 70%, red at 90%)
+- Per-message token/character counts
 
-Rendering is now capped, but LLM context still uses the full message history. Long sessions can eventually exceed model context or slow requests.
+Users can configure the model's `Context Window` size in settings. The app validates that `Max Tokens` does not exceed `Context Window`.
 
-Possible future improvement:
-
-- configurable LLM context message limit
-- manual context trimming
-- story summary memory
+Mitigation for unbounded growth still requires manual action: clearing the chat or reducing `Max Tokens`.
 
 ## 3.3 Component event IDs are still Python-guarded
 

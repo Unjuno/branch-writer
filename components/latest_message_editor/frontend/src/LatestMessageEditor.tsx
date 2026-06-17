@@ -25,29 +25,30 @@ function createRequestId(action: InterventionAction, messageId: string): string 
   return `${messageId}:${action}:${Date.now()}:${Math.random().toString(36).slice(2)}`
 }
 
-function themeStyle(theme?: StreamlitTheme): CSSProperties {
+function themeVars(theme?: StreamlitTheme): CSSProperties {
   const isDark = theme?.base === "dark"
-  const backgroundColor = theme?.backgroundColor ?? (isDark ? "#0e1117" : "#ffffff")
-  const secondaryBackgroundColor = theme?.secondaryBackgroundColor ?? (isDark ? "#262730" : "#f0f2f6")
   const textColor = theme?.textColor ?? (isDark ? "#fafafa" : "#31333f")
+  const mutedColor = isDark ? "rgba(250,250,250,0.55)" : "rgba(49,51,63,0.55)"
+  const borderColor = isDark ? "rgba(250,250,250,0.12)" : "rgba(49,51,63,0.12)"
   const primaryColor = theme?.primaryColor ?? "#ff4b4b"
-  const mutedColor = isDark ? "rgba(250, 250, 250, 0.62)" : "rgba(49, 51, 63, 0.62)"
-  const borderColor = isDark ? "rgba(250, 250, 250, 0.14)" : "rgba(49, 51, 63, 0.14)"
-  const inputBackground = isDark ? "rgba(14, 17, 23, 0.68)" : "rgba(255, 255, 255, 0.92)"
+  const bg = isDark ? "rgba(14,17,23,0.6)" : "rgba(255,255,255,0.85)"
+  const surface = isDark ? "rgba(38,39,48,0.5)" : "rgba(240,242,246,0.6)"
 
   return {
-    "--bw-bg": backgroundColor,
-    "--bw-surface": secondaryBackgroundColor,
-    "--bw-surface-soft": isDark ? "rgba(38, 39, 48, 0.62)" : "rgba(240, 242, 246, 0.72)",
-    "--bw-input-bg": inputBackground,
     "--bw-text": textColor,
     "--bw-muted": mutedColor,
     "--bw-border": borderColor,
     "--bw-primary": primaryColor,
-    "--bw-primary-text": "#ffffff",
-    "--bw-shadow": isDark ? "none" : "0 2px 10px rgba(49, 51, 63, 0.08)",
+    "--bw-bg": bg,
+    "--bw-surface": surface,
     fontFamily: theme?.font,
   } as CSSProperties
+}
+
+function openaiLogo(code: boolean): string {
+  return code
+    ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>`
+    : ""
 }
 
 function LatestMessageEditor(props: ComponentProps) {
@@ -61,7 +62,6 @@ function LatestMessageEditor(props: ComponentProps) {
   const messageId = args.messageId ?? ""
   const content = args.content ?? ""
   const disabled = Boolean(args.disabled)
-  const rootStyle = useMemo(() => themeStyle(theme), [theme])
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [selectionStart, setSelectionStart] = useState(0)
@@ -73,18 +73,12 @@ function LatestMessageEditor(props: ComponentProps) {
   }, [content, insertion])
 
   const updateSelection = () => {
-    const element = textareaRef.current
-    if (!element) return
-
-    const nextStart = element.selectionStart
-    const nextEnd = element.selectionEnd
-
-    if (nextStart !== selectionStart) {
-      setSelectionStart(nextStart)
-    }
-    if (nextEnd !== selectionEnd) {
-      setSelectionEnd(nextEnd)
-    }
+    const el = textareaRef.current
+    if (!el) return
+    const ns = el.selectionStart
+    const ne = el.selectionEnd
+    if (ns !== selectionStart) setSelectionStart(ns)
+    if (ne !== selectionEnd) setSelectionEnd(ne)
   }
 
   const emit = (action: InterventionAction) => {
@@ -95,83 +89,147 @@ function LatestMessageEditor(props: ComponentProps) {
       selectionStart,
       selectionEnd,
     }
-
     if (action === "insert_and_continue") {
       event.insertion = insertion
     }
-
     Streamlit.setComponentValue(event)
   }
 
-  const onInsertionChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
-    setInsertion(event.target.value)
-  }
+  const atEnd = selectionStart >= content.length
 
-  const selectedLength = Math.max(0, selectionEnd - selectionStart)
-  const canInsert = insertion.trim().length > 0
+  const cursorIndicator = !disabled && !atEnd ? (
+    <div
+      style={{
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: -2,
+        height: 2,
+        background: "var(--bw-primary)",
+        opacity: 0.3,
+        borderRadius: 1,
+        transition: "opacity 0.15s",
+        pointerEvents: "none",
+      }}
+    />
+  ) : null
 
   return (
-    <section className="branch-writer-editor" style={rootStyle} aria-label="Latest assistant intervention editor">
-      <div className="branch-writer-header">
-        <div>
-          <div className="branch-writer-kicker">Latest assistant</div>
-          <h3>途中から曲げる</h3>
-        </div>
-        <div className="branch-writer-badge">editable</div>
-      </div>
-
-      <textarea
-        ref={textareaRef}
-        className="branch-writer-textarea"
-        value={content}
-        readOnly
-        disabled={disabled}
-        onClick={updateSelection}
-        onKeyUp={updateSelection}
-        onSelect={updateSelection}
-        onMouseUp={updateSelection}
-        rows={Math.min(Math.max(content.split("\n").length + 2, 8), 22)}
-      />
-
-      <div className="branch-writer-toolbar">
-        <div className="branch-writer-meta-row">
-          <span>cut <code>{selectionStart}</code></span>
-          <span>end <code>{selectionEnd}</code></span>
-          <span>selected <code>{selectedLength}</code></span>
-        </div>
-        <button
-          className="branch-writer-button branch-writer-primary"
-          type="button"
-          disabled={disabled}
-          onClick={() => emit("regenerate_from_here")}
-        >
-          選択位置から再生成
-        </button>
-      </div>
-
-      <div className="branch-writer-insert-card">
-        <label htmlFor="branch-writer-insertion">一文を入れて続ける</label>
+    <div style={themeVars(theme)}>
+      <div
+        style={{
+          position: "relative",
+        }}
+      >
         <textarea
-          id="branch-writer-insertion"
-          className="branch-writer-insertion"
-          value={insertion}
+          ref={textareaRef}
+          value={content}
+          readOnly
           disabled={disabled}
-          onChange={onInsertionChange}
-          placeholder="例: しかし、"
-          rows={2}
+          onClick={updateSelection}
+          onKeyUp={updateSelection}
+          onSelect={updateSelection}
+          onMouseUp={updateSelection}
+          rows={content.split("\n").length + 1}
+          style={{
+            width: "100%",
+            border: "none",
+            borderRadius: 0,
+            padding: 0,
+            font: "inherit",
+            lineHeight: 1.7,
+            resize: "none",
+            background: "transparent",
+            color: "var(--bw-text)",
+            outline: "none",
+            cursor: "text",
+            overflow: "hidden",
+            whiteSpace: "pre-wrap",
+            wordWrap: "break-word",
+          }}
         />
-        <div className="branch-writer-insert-actions">
-          <button
-            className="branch-writer-button branch-writer-secondary"
-            type="button"
-            disabled={disabled || !canInsert}
-            onClick={() => emit("insert_and_continue")}
-          >
-            挿入して続きを生成
-          </button>
-        </div>
+        {cursorIndicator}
       </div>
-    </section>
+
+      {!disabled && (
+        <div
+          style={{
+            marginTop: 8,
+            opacity: 0.55,
+            transition: "opacity 0.2s",
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap" as const,
+            alignItems: "center",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.55")}
+        >
+          {!atEnd && (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => emit("regenerate_from_here")}
+              style={{
+                border: "none",
+                borderRadius: 4,
+                padding: "2px 10px",
+                font: "inherit",
+                fontSize: "0.78rem",
+                cursor: "pointer",
+                background: "var(--bw-surface)",
+                color: "var(--bw-primary)",
+                lineHeight: "22px",
+              }}
+            >
+              ✂ ここから再生成
+            </button>
+          )}
+
+          <div style={{ display: "flex", gap: 4, alignItems: "center", flex: 1, minWidth: 140 }}>
+            <input
+              value={insertion}
+              disabled={disabled}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setInsertion(e.target.value)}
+              placeholder="続きを入力..."
+              style={{
+                flex: 1,
+                border: "none",
+                borderBottom: "1px solid var(--bw-border)",
+                padding: "2px 4px",
+                font: "inherit",
+                fontSize: "0.78rem",
+                lineHeight: "22px",
+                background: "transparent",
+                color: "var(--bw-text)",
+                outline: "none",
+                minWidth: 80,
+              }}
+            />
+            <button
+              type="button"
+              disabled={disabled || !insertion.trim()}
+              onClick={() => emit("insert_and_continue")}
+              style={{
+                border: "none",
+                borderRadius: 4,
+                padding: "2px 10px",
+                font: "inherit",
+                fontSize: "0.78rem",
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+                background: insertion.trim() ? "var(--bw-primary)" : "transparent",
+                color: insertion.trim() ? "#fff" : "var(--bw-muted)",
+                lineHeight: "22px",
+                opacity: disabled || !insertion.trim() ? 0.4 : 1,
+              }}
+            >
+              挿入
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 

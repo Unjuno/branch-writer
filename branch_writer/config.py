@@ -10,10 +10,13 @@ DEFAULT_API_KEY = ""
 DEFAULT_MODEL = ""
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_MAX_TOKENS = 4096
+DEFAULT_CONTEXT_WINDOW = 8192
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 180.0
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 MIN_MAX_TOKENS = 1
+MIN_CONTEXT_WINDOW = 512
+MAX_CONTEXT_WINDOW = 1048576
 MIN_REQUEST_TIMEOUT_SECONDS = 5.0
 MAX_REQUEST_TIMEOUT_SECONDS = 900.0
 
@@ -27,6 +30,7 @@ class LlmSettings:
     model: str = DEFAULT_MODEL
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
+    context_window: int = DEFAULT_CONTEXT_WINDOW
     request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS
 
 
@@ -74,6 +78,16 @@ def validate_llm_settings(settings: LlmSettings) -> list[str]:
 
     if settings.max_tokens < MIN_MAX_TOKENS:
         errors.append("Max Tokens must be greater than or equal to 1")
+
+    if not MIN_CONTEXT_WINDOW <= settings.context_window <= MAX_CONTEXT_WINDOW:
+        errors.append(
+            f"Context Window must be between {MIN_CONTEXT_WINDOW:,} and {MAX_CONTEXT_WINDOW:,}"
+        )
+
+    if settings.max_tokens > settings.context_window:
+        errors.append(
+            f"Max Tokens ({settings.max_tokens}) cannot exceed Context Window ({settings.context_window})"
+        )
 
     if not MIN_REQUEST_TIMEOUT_SECONDS <= settings.request_timeout_seconds <= MAX_REQUEST_TIMEOUT_SECONDS:
         errors.append(

@@ -32,6 +32,10 @@ def initialize_state(state: MutableMapping[str, Any]) -> None:
     state.setdefault("last_error", None)
     state.setdefault("last_intervention_request_id", None)
     state.setdefault("render_message_limit", 80)
+    state.setdefault("available_models", [])
+    state.setdefault("insertion_log", [])
+    state.setdefault("reuse_insertion", None)
+    state.setdefault("streaming_generator", None)
 
 
 def get_messages(state: MutableMapping[str, Any]) -> list[ChatMessage]:

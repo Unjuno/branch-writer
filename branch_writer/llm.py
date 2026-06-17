@@ -217,15 +217,8 @@ def _intervention_messages(
     insertion: str,
 ) -> list[dict[str, str]]:
     continuation_base = assistant_prefix + insertion
-    prompt = (
-        "Continue the latest assistant response from the following exact text. "
-        "Return only the continuation text. Do not repeat the given text.\n\n"
-        "Text to continue:\n"
-        f"{continuation_base}"
-    )
-
     api_messages = to_openai_messages(frozen_messages)
-    api_messages.append({"role": "user", "content": prompt})
+    api_messages.append({"role": "assistant", "content": continuation_base})
     return api_messages
 
 

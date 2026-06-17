@@ -63,6 +63,24 @@ def test_request_timeout_too_high_is_invalid() -> None:
     assert any("Request Timeout must be between" in error for error in validate_llm_settings(settings))
 
 
+def test_context_window_too_low_is_invalid() -> None:
+    settings = LlmSettings(model="model", context_window=256)
+
+    assert any("Context Window must be between" in error for error in validate_llm_settings(settings))
+
+
+def test_context_window_too_high_is_invalid() -> None:
+    settings = LlmSettings(model="model", context_window=2_000_000)
+
+    assert any("Context Window must be between" in error for error in validate_llm_settings(settings))
+
+
+def test_max_tokens_exceeds_context_window_is_invalid() -> None:
+    settings = LlmSettings(model="model", max_tokens=4096, context_window=2048)
+
+    assert any("exceed Context Window" in error for error in validate_llm_settings(settings))
+
+
 def test_valid_settings_have_no_errors() -> None:
     settings = LlmSettings(
         base_url="http://localhost:11434/v1",
@@ -70,6 +88,7 @@ def test_valid_settings_have_no_errors() -> None:
         model="local-model",
         temperature=0.7,
         max_tokens=4096,
+        context_window=8192,
         request_timeout_seconds=180,
     )
 

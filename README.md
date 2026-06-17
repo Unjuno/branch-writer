@@ -1,91 +1,43 @@
 # Branch Writer
 
-Branch Writer is a local-first AI writing chat UI that lets you intervene in the latest assistant response from any point and regenerate the continuation.
+Branch Writer is a local-first AI writing chat UI that lets you interrupt the latest assistant response from any point, insert your own text, and regenerate the continuation.
 
-Branch Writer は、ローカルLLMを前提とした創作向けチャットUIです。
+チャットして、AIの返答の途中に割り込んで、書き換えて、続きを紡ぐ。
 
-普通のチャットUIとして使えます。ただし、最新のAI応答だけは、途中の任意地点から「ここから再生成」または「入力して続ける」ができます。
+## Features
 
-## v0 Concept
-
-```text
-普通のチャットUI
-+
-最新Assistantメッセージだけ途中介入可能
-```
-
-## v0 Features
-
-- 通常チャット送信
-- 生成中の逐次streaming表示
-- 最新Assistantメッセージのみ介入可能
-- 任意地点から「ここから再生成」
-- 任意地点にユーザー文を入れて「入力して続ける」
-- 介入生成の逐次streaming表示
-- ローカルLLM接続設定
-- OpenAI互換ローカルLLM API対応
-- 直前介入のUndo
+- Normal chat with streaming output
+- **Non-blocking streaming** — generation runs in the background; you can intervene mid-generation
+- **Regenerate from here** — discard content after any cursor position and regenerate
+- **Insert and continue** — insert your own text at any point, then have the AI continue
+- **Context usage display** — real-time sidebar showing input tokens, output headroom, and model context limit with color-coded warnings
+- **Per-message token counts** — each message shows estimated token/character count
+- **Auto model discovery** — detects available models from Ollama / LM Studio
+- **Insertion log** — reuse previously inserted text
+- **Undo last intervention** — revert the most recent intervention
+- **OpenAI-compatible local LLM support** — works with Ollama, LM Studio, llama.cpp
 
 ## Local LLM Assumption
 
-v0はローカルLLMを前提にします。
+v0 targets local LLMs exclusively.
 
-想定接続先:
+Supported endpoints:
 
-- Ollama OpenAI-compatible endpoint
+- Ollama (OpenAI-compatible endpoint)
 - LM Studio local server
 - llama.cpp server
-- OpenAI-compatible local proxy
+- Any OpenAI-compatible local proxy
 
-アプリ内で以下を設定できるようにします。
+### Settings
 
-| Setting | Example |
-|---|---|
-| API Base URL | `http://localhost:11434/v1` |
-| API Key | empty / `ollama` / `lm-studio` |
-| Model | `qwen2.5:7b` / `llama3.1:8b` |
-| Temperature | `0.7` |
-| Max Tokens | `4096` |
-| Request Timeout Seconds | `180` |
-
-## Planned Tech Stack
-
-| Area | Technology |
-|---|---|
-| App UI | Streamlit |
-| Intervention UI | Streamlit custom component |
-| Custom component | React / TypeScript |
-| Backend | Python |
-| LLM API | OpenAI-compatible local endpoint |
-| State | `st.session_state` |
-| Tests | pytest |
-| CI | GitHub Actions |
-
-## Project Documents
-
-| Document | Purpose |
-|---|---|
-| [`docs/spec-v0.md`](docs/spec-v0.md) | v0 specification |
-| [`docs/tech-stack.md`](docs/tech-stack.md) | fixed tech stack |
-| [`docs/design-v0.md`](docs/design-v0.md) | v0 design |
-| [`docs/implementation-plan.md`](docs/implementation-plan.md) | implementation plan |
-| [`docs/roadmap.md`](docs/roadmap.md) | roadmap / TODO checklist |
-| [`docs/local-test-checklist.md`](docs/local-test-checklist.md) | local validation checklist |
-
-## Development Status
-
-v0 is currently under implementation.
-
-Current implementation includes:
-
-```text
-Streamlit basic chat
-+ streaming local LLM output
-+ local LLM settings
-+ OpenAI-compatible local LLM calls
-+ latest assistant intervention fallback UI
-+ polished React/TypeScript latest message editor source
-```
+| Setting | Default | Description |
+|---|---|---|
+| API Base URL | `http://localhost:11434/v1` | LLM endpoint |
+| API Key | `""` | Authentication key |
+| Model | auto-discovered | Model selection |
+| Temperature | `0.7` | Generation temperature |
+| Max Tokens (output) | `4096` | Max output tokens |
+| Context Window | `8192` | Model's total context window |
 
 ## Installation
 
@@ -107,25 +59,17 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Validation
-
-Run Python tests:
+## Testing
 
 ```bash
 python -m pytest
 ```
 
-Use the local validation checklist for manual testing:
-
-```text
-docs/local-test-checklist.md
-```
-
 ## Optional: Build the React Intervention Component
 
-Without building the React component, the app falls back to a manual `selectionStart` UI. That fallback is usable for testing the intervention pipeline.
+Without building the React component, the app falls back to a manual `selectionStart` UI. The fallback is fully functional.
 
-To use the richer React/TypeScript latest-message editor:
+To use the richer React/TypeScript editor:
 
 ```bash
 cd components/latest_message_editor/frontend
@@ -156,28 +100,27 @@ $env:BRANCH_WRITER_COMPONENT_URL="http://localhost:5173"
 streamlit run app.py
 ```
 
-## Local LLM Example
-
-For an OpenAI-compatible local endpoint, configure the sidebar values in the app.
-
-Example values:
+## Architecture
 
 ```text
-API Base URL: http://localhost:11434/v1
-API Key: empty or any local placeholder
-Model: your-local-model-name
-Temperature: 0.7
-Max Tokens: 4096
-Request Timeout Seconds: 180
+Streamlit app (Python)
+  |
+  +-- LatestMessageEditor (React/TypeScript custom component)
+  |     - Displays latest assistant message
+  |     - Captures cursor position
+  |     - Emits intervention events
+  |
+  +-- branch_writer/
+        - config.py        — LLM settings model
+        - llm.py           — OpenAI-compatible API client
+        - intervention.py  — regenerate / insert logic
+        - messages.py      — chat message model
+        - state.py         — session state management
 ```
-
-The app uses `stream: true` for normal chat generation and intervention generation, so the response should appear incrementally rather than as one completed block.
 
 ## Security Notes
 
-Do not commit API keys or local environment files.
-
-The following files should remain local only:
+Do not commit API keys. The following files should remain local:
 
 ```text
 .env
@@ -187,12 +130,13 @@ The following files should remain local only:
 
 ## Known v0 Limitations
 
-- Only the latest Assistant message can be intervened on.
-- Past messages are frozen.
-- There is no branch tree UI.
-- There is no automatic contradiction detection.
-- There is no natural-ending guard.
-- Persistence is not implemented in v0.
+- Only the latest assistant message can be intervened on
+- Past messages are frozen (no editing)
+- No branch tree UI
+- No automatic contradiction detection
+- No natural-ending guard
+- No persistence
+- Intervention continuation still uses synchronous streaming
 
 ## License
 

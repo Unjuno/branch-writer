@@ -8,6 +8,7 @@ from uuid import uuid4
 import streamlit as st
 
 from branch_writer.config import LlmSettings, validate_llm_settings
+from branch_writer.model_discovery import discover_models_sync
 from branch_writer.intervention import (
     insert_and_continue,
     regenerate_from_here,
@@ -41,6 +42,35 @@ MIN_RENDER_MESSAGE_LIMIT = 10
 MAX_RENDER_MESSAGE_LIMIT = 500
 CURSOR = "▌"
 
+_CURSOR_CSS_INJECTED = False
+_CHARS_PER_TOKEN_ESTIMATE = 4
+
+
+def _inject_cursor_css() -> None:
+    """Inject CSS for the streaming cursor once."""
+    global _CURSOR_CSS_INJECTED
+    if _CURSOR_CSS_INJECTED:
+        return
+    _CURSOR_CSS_INJECTED = True
+    st.markdown(
+        """<style>
+.bw-cursor {
+    animation: bw-blink 0.9s step-end infinite;
+    color: var(--primary-color);
+    font-weight: bold;
+}
+@keyframes bw-blink {
+    50% { opacity: 0; }
+}
+</style>""",
+        unsafe_allow_html=True,
+    )
+
+
+def _cursor_span() -> str:
+    """Return an HTML span for the streaming cursor."""
+    return '<span class="bw-cursor">▌</span>'
+
 
 def reset_chat_state() -> None:
     """Clear chat-related state without changing LLM settings."""
@@ -49,6 +79,62 @@ def reset_chat_state() -> None:
     st.session_state["last_error"] = None
     st.session_state["is_generating"] = False
     st.session_state["last_intervention_request_id"] = None
+    st.session_state["pending_intervention"] = None
+    st.session_state["insertion_log"] = []
+    st.session_state["reuse_insertion"] = None
+    st.session_state["streaming_generator"] = None
+
+
+def estimate_tokens(text: str) -> int:
+    return max(len(text) // _CHARS_PER_TOKEN_ESTIMATE, 0)
+
+
+def render_context_usage() -> None:
+    """Display context usage with warnings, breakdown, and per-message sizes."""
+    messages: list[ChatMessage] = st.session_state["messages"]
+    settings: LlmSettings = st.session_state["llm_settings"]
+    ctx = settings.context_window
+    max_out = settings.max_tokens
+
+    total_chars = sum(len(m.content) for m in messages)
+    input_tokens = estimate_tokens(total_chars)
+    output_headroom = max_out
+    total_usage = input_tokens + output_headroom
+    used_ratio = total_usage / ctx if ctx > 0 else 0
+
+    st.sidebar.divider()
+    st.sidebar.caption("Model Context")
+
+    col1, col2, col3 = st.sidebar.columns(3)
+    col1.metric("Input~", f"{input_tokens:,}")
+    col2.metric("Output", f"{output_headroom:,}")
+    col3.metric("Limit", f"{ctx:,}")
+
+    bar_color = "default"
+    warn = ""
+    if used_ratio >= 0.90:
+        bar_color = "🔥"
+        warn = "DANGER: Context nearly full!"
+    elif used_ratio >= 0.70:
+        bar_color = "⚠️"
+        warn = "Warning: Context running low"
+
+    progress_val = min(used_ratio, 1.0)
+    pct = int(progress_val * 100)
+
+    st.sidebar.progress(
+        progress_val,
+        text=f"{bar_color} {input_tokens:,} in + {output_headroom:,} out = {total_usage:,} / {ctx:,} ({pct}%)",
+    )
+
+    if warn:
+        if "DANGER" in warn:
+            st.sidebar.error(warn)
+        else:
+            st.sidebar.warning(warn)
+
+    if used_ratio >= 0.70:
+        st.sidebar.caption("💡 Clear chat or reduce `Max Tokens` to free up space.")
 
 
 def render_sidebar() -> None:
@@ -59,10 +145,40 @@ def render_sidebar() -> None:
     st.sidebar.header("LLM Settings")
     settings.base_url = st.sidebar.text_input("API Base URL", value=settings.base_url, disabled=is_generating)
     settings.api_key = st.sidebar.text_input("API Key", value=settings.api_key, type="password", disabled=is_generating)
-    settings.model = st.sidebar.text_input("Model", value=settings.model, disabled=is_generating)
+
+    if settings.base_url.strip() and not is_generating and st.session_state.get("_discovered_at_url") is None:
+        st.session_state["_discovered_at_url"] = settings.base_url
+        with st.spinner("モデル一覧を取得中..."):
+            models = discover_models_sync(settings.base_url)
+            st.session_state["available_models"] = models
+        st.rerun()
+
+    if st.sidebar.button("🔄 モデル一覧を再取得", disabled=is_generating, key="discover_models_btn"):
+        with st.spinner("モデル一覧を取得中..."):
+            models = discover_models_sync(settings.base_url)
+            st.session_state["available_models"] = models
+            st.session_state["_discovered_at_url"] = settings.base_url
+        st.rerun()
+
+    available = st.session_state.get("available_models", [])
+    if available:
+        model_names = [m["name"] for m in available]
+        current = settings.model if settings.model in model_names else model_names[0]
+        selected = st.sidebar.selectbox(
+            "Model",
+            options=model_names,
+            index=model_names.index(current),
+            disabled=is_generating,
+        )
+        settings.model = selected
+    else:
+        settings.model = st.sidebar.text_input("Model", value=settings.model, disabled=is_generating)
     settings.temperature = st.sidebar.slider("Temperature", min_value=0.0, max_value=2.0, value=float(settings.temperature), step=0.1, disabled=is_generating)
-    settings.max_tokens = st.sidebar.number_input("Max Tokens", min_value=1, max_value=32768, value=int(settings.max_tokens), step=1, disabled=is_generating)
+    settings.max_tokens = st.sidebar.number_input("Max Tokens (output)", min_value=1, max_value=32768, value=int(settings.max_tokens), step=1, disabled=is_generating)
+    settings.context_window = st.sidebar.number_input("Context Window (model limit)", min_value=512, max_value=1048576, value=int(settings.context_window), step=512, disabled=is_generating)
     settings.request_timeout_seconds = st.sidebar.number_input("Request Timeout Seconds", min_value=5, max_value=900, value=int(settings.request_timeout_seconds), step=5, disabled=is_generating)
+
+    render_context_usage()
 
     st.sidebar.divider()
     st.session_state["render_message_limit"] = st.sidebar.number_input(
@@ -87,11 +203,30 @@ def render_sidebar() -> None:
         reset_chat_state()
         st.rerun()
 
+    insertion_log: list[dict[str, str]] = st.session_state.get("insertion_log", [])
+    if insertion_log:
+        st.sidebar.divider()
+        st.sidebar.caption("Insertion Log")
+        for i, entry in enumerate(insertion_log):
+            text = entry["text"]
+            label = text[:30] + "..." if len(text) > 30 else text
+            cols = st.sidebar.columns([4, 1])
+            cols[0].text(f"{i+1}. {label}")
+            if cols[1].button("使用", key=f"reuse-insertion-{i}"):
+                st.session_state["reuse_insertion"] = text
+                st.rerun()
+
 
 def render_frozen_message(message: ChatMessage) -> None:
     """Render a non-intervenable message with standard Streamlit chat UI."""
     with st.chat_message(message.role):
-        st.markdown(message.content)
+        content = message.content
+        if message.status == "streaming" and content:
+            content = content + _cursor_span()
+        st.markdown(content, unsafe_allow_html=True)
+        if message.status != "streaming" and content:
+            tokens = estimate_tokens(content)
+            st.caption(f"~{tokens:,} tokens | {len(content):,} chars")
 
 
 def render_latest_assistant_message(message: ChatMessage) -> dict[str, Any] | None:
@@ -101,8 +236,8 @@ def render_latest_assistant_message(message: ChatMessage) -> dict[str, Any] | No
             return latest_message_editor(
                 message_id=message.id,
                 content=message.content,
-                disabled=st.session_state["is_generating"],
-                key=f"latest-message-editor-{message.id}",
+                disabled=False,
+                key="latest-message-editor",
             )
 
         st.markdown(message.content)
@@ -115,7 +250,7 @@ def render_latest_assistant_message(message: ChatMessage) -> dict[str, Any] | No
 
 def render_manual_intervention_fallback(message: ChatMessage) -> dict[str, Any] | None:
     """Fallback UI for intervention before the React component is built."""
-    disabled = bool(st.session_state["is_generating"])
+    disabled = False  # Allow intervention even during generation
     max_index = len(message.content)
     selection_start = st.number_input(
         "selectionStart",
@@ -126,7 +261,10 @@ def render_manual_intervention_fallback(message: ChatMessage) -> dict[str, Any] 
         key=f"manual-selection-{message.id}",
         disabled=disabled,
     )
-    insertion = st.text_area("挿入する文", value="", key=f"manual-insertion-{message.id}", disabled=disabled)
+
+    reuse = st.session_state.pop("reuse_insertion", None)
+    default_insertion = reuse if reuse else ""
+    insertion = st.text_area("挿入する文", value=default_insertion, key=f"manual-insertion-{message.id}", disabled=disabled)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -174,18 +312,42 @@ def render_messages() -> dict[str, Any] | None:
     return event
 
 
-def _stream_to_placeholder(message: ChatMessage, placeholder: Any, chunks: Any) -> str:
-    content = message.content
-    for chunk in chunks:
-        content += chunk
-        message.content = content
-        placeholder.markdown(content + CURSOR)
-    placeholder.markdown(content)
-    return content
+def continue_streaming() -> None:
+    """Pull the next chunk from an in-progress streaming generator."""
+    generator = st.session_state.get("streaming_generator")
+    if generator is None:
+        return
+
+    messages: list[ChatMessage] = st.session_state["messages"]
+    if not messages or messages[-1].status != "streaming":
+        st.session_state["streaming_generator"] = None
+        set_generating(st.session_state, False)
+        return
+
+    assistant = messages[-1]
+    try:
+        chunk = next(generator)
+        assistant.content += chunk
+    except StopIteration:
+        assistant.status = "complete"
+        st.session_state["streaming_generator"] = None
+        set_generating(st.session_state, False)
+    except LlmError as exc:
+        set_error(st.session_state, str(exc))
+        assistant.content = "ローカルLLMへの接続または生成に失敗しました。サイドバーの設定を確認してください。"
+        assistant.status = "error"
+        st.session_state["streaming_generator"] = None
+        set_generating(st.session_state, False)
+    except Exception as exc:
+        set_error(st.session_state, f"Unexpected generation error: {type(exc).__name__}: {exc}")
+        assistant.content = "予期しないエラーで生成に失敗しました。エラー表示を確認してください。"
+        assistant.status = "error"
+        st.session_state["streaming_generator"] = None
+        set_generating(st.session_state, False)
 
 
 def handle_user_prompt(prompt: str) -> None:
-    """Append a user prompt and stream an assistant response."""
+    """Append a user prompt and start streaming an assistant response."""
     messages: list[ChatMessage] = st.session_state["messages"]
     settings: LlmSettings = st.session_state["llm_settings"]
 
@@ -193,29 +355,10 @@ def handle_user_prompt(prompt: str) -> None:
     set_error(st.session_state, None)
     set_generating(st.session_state, True)
 
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    append_assistant_message(messages, "", status="streaming")
 
-    assistant = append_assistant_message(messages, "", status="streaming")
-
-    with st.chat_message("assistant"):
-        placeholder = st.empty()
-        try:
-            chunks = iter_chat_response(messages[:-1], settings)
-            _stream_to_placeholder(assistant, placeholder, chunks)
-            assistant.status = "complete"
-        except LlmError as exc:
-            set_error(st.session_state, str(exc))
-            assistant.content = "ローカルLLMへの接続または生成に失敗しました。サイドバーの設定を確認してください。"
-            assistant.status = "error"
-            placeholder.markdown(assistant.content)
-        except Exception as exc:  # pragma: no cover - defensive Streamlit guard
-            set_error(st.session_state, f"Unexpected generation error: {type(exc).__name__}: {exc}")
-            assistant.content = "予期しないエラーで生成に失敗しました。エラー表示を確認してください。"
-            assistant.status = "error"
-            placeholder.markdown(assistant.content)
-        finally:
-            set_generating(st.session_state, False)
+    generator = iter_chat_response(messages[:-1], settings)
+    st.session_state["streaming_generator"] = generator
 
 
 def _event_fingerprint(event: dict[str, Any]) -> str:
@@ -231,9 +374,6 @@ def _event_request_id(event: dict[str, Any]) -> str:
 
 def handle_intervention_event(event: dict[str, Any]) -> bool:
     """Apply an intervention event emitted by the latest-message editor."""
-    if st.session_state["is_generating"]:
-        return False
-
     request_id = _event_request_id(event)
     if st.session_state.get("last_intervention_request_id") == request_id:
         return False
@@ -275,6 +415,9 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
         set_error(st.session_state, str(exc))
         return True
 
+    # Cancel any ongoing streaming
+    st.session_state["streaming_generator"] = None
+
     set_error(st.session_state, None)
     set_generating(st.session_state, True)
 
@@ -288,7 +431,7 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
         with st.chat_message("assistant"):
             st.caption("Streaming revised continuation")
             placeholder = st.empty()
-            placeholder.markdown(base_content + CURSOR)
+            placeholder.markdown(base_content + _cursor_span(), unsafe_allow_html=True)
             chunks = iter_intervention_continuation(
                 frozen_messages=frozen_messages_before_latest(messages),
                 assistant_prefix=prefix,
@@ -301,7 +444,7 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
                 raw_continuation += chunk
                 clean_continuation = strip_continuation_overlap(base_content, raw_continuation)
                 latest.content = base_content + clean_continuation
-                placeholder.markdown(latest.content + CURSOR)
+                placeholder.markdown(latest.content + _cursor_span(), unsafe_allow_html=True)
             placeholder.markdown(latest.content)
 
         if action == "regenerate_from_here":
@@ -318,11 +461,16 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
             after_content=latest.content,
             action=str(action),
         )
+
+        if action == "insert_and_continue" and insertion:
+            from datetime import datetime, timezone
+            log: list[dict[str, str]] = st.session_state.setdefault("insertion_log", [])
+            log.append({"text": insertion, "timestamp": datetime.now(timezone.utc).isoformat()})
     except (LlmError, TypeError, ValueError) as exc:
         latest.content = before_content
         latest.status = "complete"
         set_error(st.session_state, str(exc))
-    except Exception as exc:  # pragma: no cover - defensive Streamlit guard
+    except Exception as exc:
         latest.content = before_content
         latest.status = "complete"
         set_error(st.session_state, f"Unexpected intervention error: {type(exc).__name__}: {exc}")
@@ -353,9 +501,15 @@ def undo_last_intervention() -> None:
 def main() -> None:
     st.set_page_config(page_title="Branch Writer", page_icon="✍️", layout="centered")
     initialize_state(st.session_state)
+    _inject_cursor_css()
 
     st.title("Branch Writer")
-    st.caption("普通のチャットUI。ただし、AIの最新出力だけは途中から曲げられる。")
+    st.caption("チャットして、AIの返答の途中に割り込んで、書き換えて、続きを紡ぐ。")
+
+    # Continue streaming before rendering so context usage is up-to-date
+    if st.session_state["is_generating"] and st.session_state.get("streaming_generator"):
+        continue_streaming()
+        st.rerun()
 
     render_sidebar()
 
@@ -365,8 +519,13 @@ def main() -> None:
 
     event = render_messages()
     if event:
-        processed = handle_intervention_event(event)
-        if processed:
+        st.session_state["pending_intervention"] = event
+        st.rerun()
+
+    pending = st.session_state.pop("pending_intervention", None)
+    if pending:
+        handled = handle_intervention_event(pending)
+        if handled:
             st.rerun()
 
     prompt = st.chat_input("メッセージを入力", disabled=bool(st.session_state["is_generating"]))
