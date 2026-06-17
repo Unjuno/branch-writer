@@ -35,37 +35,83 @@ from branch_writer.state import (
 from components.latest_message_editor import component_available, latest_message_editor
 
 VALID_INTERVENTION_ACTIONS = {"regenerate_from_here", "insert_and_continue"}
+DEFAULT_RENDER_MESSAGE_LIMIT = 80
+MIN_RENDER_MESSAGE_LIMIT = 10
+MAX_RENDER_MESSAGE_LIMIT = 500
+
+
+def reset_chat_state() -> None:
+    """Clear chat-related state without changing LLM settings."""
+    st.session_state["messages"] = []
+    st.session_state["undo_stack"] = []
+    st.session_state["last_error"] = None
+    st.session_state["is_generating"] = False
+    st.session_state["last_intervention_request_id"] = None
 
 
 def render_sidebar() -> None:
     """Render local LLM settings."""
     settings: LlmSettings = st.session_state["llm_settings"]
+    is_generating = bool(st.session_state["is_generating"])
 
     st.sidebar.header("LLM Settings")
-    settings.base_url = st.sidebar.text_input("API Base URL", value=settings.base_url)
-    settings.api_key = st.sidebar.text_input("API Key", value=settings.api_key, type="password")
-    settings.model = st.sidebar.text_input("Model", value=settings.model)
+    settings.base_url = st.sidebar.text_input(
+        "API Base URL",
+        value=settings.base_url,
+        disabled=is_generating,
+    )
+    settings.api_key = st.sidebar.text_input(
+        "API Key",
+        value=settings.api_key,
+        type="password",
+        disabled=is_generating,
+    )
+    settings.model = st.sidebar.text_input(
+        "Model",
+        value=settings.model,
+        disabled=is_generating,
+    )
     settings.temperature = st.sidebar.slider(
         "Temperature",
         min_value=0.0,
         max_value=2.0,
         value=float(settings.temperature),
         step=0.1,
+        disabled=is_generating,
     )
     settings.max_tokens = st.sidebar.number_input(
         "Max Tokens",
         min_value=1,
-        max_value=8192,
+        max_value=32768,
         value=int(settings.max_tokens),
         step=1,
+        disabled=is_generating,
+    )
+
+    st.sidebar.divider()
+    st.session_state["render_message_limit"] = st.sidebar.number_input(
+        "Rendered message limit",
+        min_value=MIN_RENDER_MESSAGE_LIMIT,
+        max_value=MAX_RENDER_MESSAGE_LIMIT,
+        value=int(st.session_state.get("render_message_limit", DEFAULT_RENDER_MESSAGE_LIMIT)),
+        step=10,
+        disabled=is_generating,
     )
 
     errors = validate_llm_settings(settings)
     if errors:
         st.sidebar.warning("\n".join(errors))
 
-    if st.sidebar.button("Undo last intervention", disabled=not st.session_state["undo_stack"]):
+    st.sidebar.divider()
+    if st.sidebar.button(
+        "Undo last intervention",
+        disabled=is_generating or not st.session_state["undo_stack"],
+    ):
         undo_last_intervention()
+        st.rerun()
+
+    if st.sidebar.button("Clear chat", disabled=is_generating):
+        reset_chat_state()
         st.rerun()
 
 
@@ -97,6 +143,7 @@ def render_latest_assistant_message(message: ChatMessage) -> dict[str, Any] | No
 
 def render_manual_intervention_fallback(message: ChatMessage) -> dict[str, Any] | None:
     """Fallback UI for intervention before the React component is built."""
+    disabled = bool(st.session_state["is_generating"])
     max_index = len(message.content)
     selection_start = st.number_input(
         "selectionStart",
@@ -105,16 +152,18 @@ def render_manual_intervention_fallback(message: ChatMessage) -> dict[str, Any] 
         value=max_index,
         step=1,
         key=f"manual-selection-{message.id}",
+        disabled=disabled,
     )
     insertion = st.text_area(
         "挿入する文",
         value="",
         key=f"manual-insertion-{message.id}",
+        disabled=disabled,
     )
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("ここから再生成", key=f"manual-regenerate-{message.id}"):
+        if st.button("ここから再生成", key=f"manual-regenerate-{message.id}", disabled=disabled):
             return {
                 "requestId": str(uuid4()),
                 "action": "regenerate_from_here",
@@ -123,7 +172,7 @@ def render_manual_intervention_fallback(message: ChatMessage) -> dict[str, Any] 
                 "selectionEnd": int(selection_start),
             }
     with col2:
-        if st.button("入力して続ける", key=f"manual-insert-{message.id}"):
+        if st.button("入力して続ける", key=f"manual-insert-{message.id}", disabled=disabled):
             return {
                 "requestId": str(uuid4()),
                 "action": "insert_and_continue",
@@ -140,9 +189,16 @@ def render_messages() -> dict[str, Any] | None:
     """Render chat history and return the latest intervention event if any."""
     messages: list[ChatMessage] = st.session_state["messages"]
     event = None
+    limit = int(st.session_state.get("render_message_limit", DEFAULT_RENDER_MESSAGE_LIMIT))
+    hidden_count = max(0, len(messages) - limit)
+    visible_messages = messages[-limit:]
 
-    for index, message in enumerate(messages):
-        is_latest = index == len(messages) - 1
+    if hidden_count:
+        st.caption(f"Older messages hidden for performance: {hidden_count}")
+
+    for index, message in enumerate(visible_messages):
+        original_index = hidden_count + index
+        is_latest = original_index == len(messages) - 1
         if is_latest and is_intervenable(messages, message.id):
             event = render_latest_assistant_message(message)
         else:
@@ -167,6 +223,13 @@ def handle_user_prompt(prompt: str) -> None:
         append_assistant_message(
             messages,
             "ローカルLLMへの接続または生成に失敗しました。サイドバーの設定を確認してください。",
+            status="error",
+        )
+    except Exception as exc:  # pragma: no cover - defensive Streamlit guard
+        set_error(st.session_state, f"Unexpected generation error: {type(exc).__name__}: {exc}")
+        append_assistant_message(
+            messages,
+            "予期しないエラーで生成に失敗しました。エラー表示を確認してください。",
             status="error",
         )
     else:
@@ -201,6 +264,9 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
     components keep returning their last value across reruns, so duplicate
     events must be ignored without triggering another rerun.
     """
+    if st.session_state["is_generating"]:
+        return False
+
     request_id = _event_request_id(event)
     if st.session_state.get("last_intervention_request_id") == request_id:
         return False
@@ -269,6 +335,8 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
         )
     except (LlmError, TypeError, ValueError) as exc:
         set_error(st.session_state, str(exc))
+    except Exception as exc:  # pragma: no cover - defensive Streamlit guard
+        set_error(st.session_state, f"Unexpected intervention error: {type(exc).__name__}: {exc}")
     finally:
         set_generating(st.session_state, False)
 
@@ -288,6 +356,7 @@ def undo_last_intervention() -> None:
         return
 
     messages[-1].content = snapshot.before_content
+    st.session_state["last_intervention_request_id"] = None
     set_error(st.session_state, None)
 
 
@@ -310,9 +379,10 @@ def main() -> None:
         if processed:
             st.rerun()
 
-    prompt = st.chat_input("メッセージを入力")
+    prompt = st.chat_input("メッセージを入力", disabled=bool(st.session_state["is_generating"]))
     if prompt:
-        handle_user_prompt(prompt)
+        with st.spinner("Generating..."):
+            handle_user_prompt(prompt)
         st.rerun()
 
 
