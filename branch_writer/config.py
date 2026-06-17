@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 DEFAULT_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_API_KEY = ""
@@ -28,6 +29,25 @@ class LlmSettings:
 def default_llm_settings() -> LlmSettings:
     """Return default local LLM settings."""
     return LlmSettings()
+
+
+def normalize_openai_base_url(base_url: str) -> str:
+    """Normalize a local server URL to an OpenAI-compatible base URL.
+
+    LM Studio and similar local servers often display the server root, such as
+    ``http://localhost:1234``. The OpenAI SDK expects the API base path, usually
+    ``/v1``. If the user already supplies a path, it is preserved unless it is
+    the root path.
+    """
+    stripped = base_url.strip().rstrip("/")
+    if not stripped:
+        return stripped
+
+    parsed = urlparse(stripped)
+    if parsed.path in {"", "/"}:
+        return f"{stripped}/v1"
+
+    return stripped
 
 
 def validate_llm_settings(settings: LlmSettings) -> list[str]:
