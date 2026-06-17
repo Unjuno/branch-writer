@@ -65,3 +65,12 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 data/
+
+# Playwright MCP
+.playwright-mcp/
+
+# opencode config
+opencode.json
+
+# Unused React component
+components/

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-DEFAULT_BASE_URL = "http://localhost:11434/v1"
+DEFAULT_BASE_URL = ""
 DEFAULT_API_KEY = ""
 DEFAULT_MODEL = ""
 DEFAULT_TEMPERATURE = 0.7
@@ -19,6 +19,49 @@ MIN_CONTEXT_WINDOW = 512
 MAX_CONTEXT_WINDOW = 1048576
 MIN_REQUEST_TIMEOUT_SECONDS = 5.0
 MAX_REQUEST_TIMEOUT_SECONDS = 900.0
+
+MODEL_CAPABILITIES: dict[str, tuple[int, int]] = {
+    "llama3.2": (128000, 8192),
+    "llama3.1": (128000, 8192),
+    "llama3": (8192, 4096),
+    "llama2": (4096, 2048),
+    "qwen2.5": (32768, 8192),
+    "qwen2": (32768, 8192),
+    "qwen": (32768, 8192),
+    "mistral": (32768, 8192),
+    "mixtral": (32768, 8192),
+    "phi3": (128000, 8192),
+    "phi-3": (128000, 8192),
+    "phi4": (16384, 8192),
+    "gemma2": (8192, 4096),
+    "gemma": (8192, 4096),
+    "codellama": (16384, 4096),
+    "deepseek-coder": (16384, 4096),
+    "deepseek-r1": (131072, 8192),
+    "deepseek-v2": (131072, 8192),
+    "deepseek-v3": (131072, 8192),
+    "nemotron": (131072, 8192),
+    "command-r": (131072, 4096),
+    "command-r-plus": (131072, 4096),
+    "aya": (131072, 4096),
+    "dbrx": (32768, 4096),
+    "starcoder2": (16384, 4096),
+    "stable-code": (16384, 4096),
+    "falcon": (8192, 4096),
+    "solar": (4096, 2048),
+    "yi": (4096, 2048),
+    "codegeex4": (131072, 8192),
+}
+
+
+def lookup_model_capabilities(model_name: str) -> tuple[int, int]:
+    """Return (context_window, max_tokens) guessed from model name."""
+    name_lower = model_name.lower().strip().rstrip(":latest")
+    # Exact match first (e.g. "llama3.2:3b" -> "llama3.2")
+    for prefix, (ctx, out) in MODEL_CAPABILITIES.items():
+        if name_lower.startswith(prefix):
+            return ctx, out
+    return DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS
 
 
 @dataclass(slots=True)
@@ -65,8 +108,7 @@ def validate_llm_settings(settings: LlmSettings) -> list[str]:
     """
     errors: list[str] = []
 
-    if not settings.base_url.strip():
-        errors.append("API Base URL is required")
+    # base_url is optional — empty means auto-detect
 
     if not settings.model.strip():
         errors.append("Model is required")

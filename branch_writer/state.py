@@ -36,6 +36,8 @@ def initialize_state(state: MutableMapping[str, Any]) -> None:
     state.setdefault("insertion_log", [])
     state.setdefault("reuse_insertion", None)
     state.setdefault("streaming_generator", None)
+    state.setdefault("streaming_intervention", None)
+    state.setdefault("_in_intervention_streaming", False)
 
 
 def get_messages(state: MutableMapping[str, Any]) -> list[ChatMessage]:

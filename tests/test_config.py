@@ -14,6 +14,7 @@ def test_default_llm_settings() -> None:
     settings = default_llm_settings()
 
     assert settings.base_url == DEFAULT_BASE_URL
+    assert settings.base_url == ""
     assert settings.temperature == DEFAULT_TEMPERATURE
     assert settings.max_tokens == DEFAULT_MAX_TOKENS
     assert settings.max_tokens == 4096
@@ -21,10 +22,10 @@ def test_default_llm_settings() -> None:
     assert settings.request_timeout_seconds == 180.0
 
 
-def test_empty_base_url_is_invalid() -> None:
+def test_empty_base_url_is_valid() -> None:
     settings = LlmSettings(base_url="", model="model")
 
-    assert "API Base URL is required" in validate_llm_settings(settings)
+    assert "API Base URL" not in str(validate_llm_settings(settings))
 
 
 def test_empty_model_is_invalid() -> None:
