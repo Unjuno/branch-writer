@@ -72,19 +72,17 @@ v0はローカルLLMを前提にします。
 
 v0 is currently under implementation.
 
-The first implementation target is:
+Current implementation includes:
 
 ```text
 Streamlit basic chat
 + local LLM settings
-+ latest assistant intervention UI
++ OpenAI-compatible local LLM calls
++ latest assistant intervention fallback UI
++ React/TypeScript latest message editor source
 ```
 
 ## Installation
-
-This section will be completed during implementation.
-
-Expected flow:
 
 ```bash
 git clone https://github.com/Unjuno/branch-writer.git
@@ -104,6 +102,55 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Optional: Build the React Intervention Component
+
+Without building the React component, the app falls back to a manual `selectionStart` UI. That fallback is usable for testing the intervention pipeline.
+
+To use the richer React/TypeScript latest-message editor:
+
+```bash
+cd components/latest_message_editor/frontend
+npm install
+npm run build
+cd ../../..
+streamlit run app.py
+```
+
+For frontend development, start the component dev server:
+
+```bash
+cd components/latest_message_editor/frontend
+npm install
+npm run dev
+```
+
+Then, in another shell:
+
+```bash
+BRANCH_WRITER_COMPONENT_URL=http://localhost:5173 streamlit run app.py
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:BRANCH_WRITER_COMPONENT_URL="http://localhost:5173"
+streamlit run app.py
+```
+
+## Local LLM Example
+
+For an OpenAI-compatible local endpoint, configure the sidebar values in the app.
+
+Example values:
+
+```text
+API Base URL: http://localhost:11434/v1
+API Key: empty or any local placeholder
+Model: your-local-model-name
+Temperature: 0.7
+Max Tokens: 512
+```
+
 ## Security Notes
 
 Do not commit API keys or local environment files.
@@ -115,6 +162,15 @@ The following files should remain local only:
 .env.local
 .streamlit/secrets.toml
 ```
+
+## Known v0 Limitations
+
+- Only the latest Assistant message can be intervened on.
+- Past messages are frozen.
+- There is no branch tree UI.
+- There is no automatic contradiction detection.
+- There is no natural-ending guard.
+- Persistence is not implemented in v0.
 
 ## License
 
