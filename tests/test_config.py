@@ -15,6 +15,7 @@ def test_default_llm_settings() -> None:
     assert settings.base_url == DEFAULT_BASE_URL
     assert settings.temperature == DEFAULT_TEMPERATURE
     assert settings.max_tokens == DEFAULT_MAX_TOKENS
+    assert settings.max_tokens == 4096
 
 
 def test_empty_base_url_is_invalid() -> None:
@@ -53,7 +54,7 @@ def test_valid_settings_have_no_errors() -> None:
         api_key="",
         model="local-model",
         temperature=0.7,
-        max_tokens=512,
+        max_tokens=4096,
     )
 
     assert validate_llm_settings(settings) == []
