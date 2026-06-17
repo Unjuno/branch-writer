@@ -67,6 +67,7 @@ v0はローカルLLMを前提にします。
 | [`docs/design-v0.md`](docs/design-v0.md) | v0 design |
 | [`docs/implementation-plan.md`](docs/implementation-plan.md) | implementation plan |
 | [`docs/roadmap.md`](docs/roadmap.md) | roadmap / TODO checklist |
+| [`docs/local-test-checklist.md`](docs/local-test-checklist.md) | local validation checklist |
 
 ## Development Status
 
@@ -100,6 +101,20 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 streamlit run app.py
+```
+
+## Validation
+
+Run Python tests:
+
+```bash
+python -m pytest
+```
+
+Use the local validation checklist for manual testing:
+
+```text
+docs/local-test-checklist.md
 ```
 
 ## Optional: Build the React Intervention Component
