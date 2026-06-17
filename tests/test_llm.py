@@ -1,7 +1,12 @@
 import pytest
 
 from branch_writer.config import LlmSettings
-from branch_writer.llm import LlmError, _chat_completions_url, _extract_content
+from branch_writer.llm import (
+    LlmError,
+    _chat_completions_url,
+    _extract_content,
+    _extract_delta_content,
+)
 
 
 def test_chat_completions_url_adds_v1_path() -> None:
@@ -35,6 +40,18 @@ def test_extract_content_from_text_choice_response() -> None:
     data = {"choices": [{"text": "fallback text"}]}
 
     assert _extract_content(data) == "fallback text"
+
+
+def test_extract_delta_content_from_streaming_delta() -> None:
+    data = {"choices": [{"delta": {"content": "こ"}}]}
+
+    assert _extract_delta_content(data) == "こ"
+
+
+def test_extract_delta_content_from_empty_streaming_delta() -> None:
+    data = {"choices": [{"delta": {}}]}
+
+    assert _extract_delta_content(data) == ""
 
 
 def test_extract_content_raises_with_raw_response_when_no_choices() -> None:
