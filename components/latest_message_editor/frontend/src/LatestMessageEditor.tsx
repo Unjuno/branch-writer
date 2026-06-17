@@ -1,4 +1,4 @@
-import React, { ChangeEvent, useEffect, useRef, useState } from "react"
+import React, { ChangeEvent, CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import { ComponentProps, Streamlit } from "streamlit-component-lib"
 
 type InterventionAction = "regenerate_from_here" | "insert_and_continue"
@@ -12,8 +12,42 @@ type InterventionEvent = {
   insertion?: string
 }
 
+type StreamlitTheme = {
+  base?: "light" | "dark"
+  primaryColor?: string
+  backgroundColor?: string
+  secondaryBackgroundColor?: string
+  textColor?: string
+  font?: string
+}
+
 function createRequestId(action: InterventionAction, messageId: string): string {
   return `${messageId}:${action}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+}
+
+function themeStyle(theme?: StreamlitTheme): CSSProperties {
+  const isDark = theme?.base === "dark"
+  const backgroundColor = theme?.backgroundColor ?? (isDark ? "#0e1117" : "#ffffff")
+  const secondaryBackgroundColor = theme?.secondaryBackgroundColor ?? (isDark ? "#262730" : "#f0f2f6")
+  const textColor = theme?.textColor ?? (isDark ? "#fafafa" : "#31333f")
+  const primaryColor = theme?.primaryColor ?? "#ff4b4b"
+  const mutedColor = isDark ? "rgba(250, 250, 250, 0.62)" : "rgba(49, 51, 63, 0.62)"
+  const borderColor = isDark ? "rgba(250, 250, 250, 0.14)" : "rgba(49, 51, 63, 0.14)"
+  const inputBackground = isDark ? "rgba(14, 17, 23, 0.68)" : "rgba(255, 255, 255, 0.92)"
+
+  return {
+    "--bw-bg": backgroundColor,
+    "--bw-surface": secondaryBackgroundColor,
+    "--bw-surface-soft": isDark ? "rgba(38, 39, 48, 0.62)" : "rgba(240, 242, 246, 0.72)",
+    "--bw-input-bg": inputBackground,
+    "--bw-text": textColor,
+    "--bw-muted": mutedColor,
+    "--bw-border": borderColor,
+    "--bw-primary": primaryColor,
+    "--bw-primary-text": "#ffffff",
+    "--bw-shadow": isDark ? "none" : "0 2px 10px rgba(49, 51, 63, 0.08)",
+    fontFamily: theme?.font,
+  } as CSSProperties
 }
 
 function LatestMessageEditor(props: ComponentProps) {
@@ -22,10 +56,12 @@ function LatestMessageEditor(props: ComponentProps) {
     content?: string
     disabled?: boolean
   }
+  const theme = (props as ComponentProps & { theme?: StreamlitTheme }).theme
 
   const messageId = args.messageId ?? ""
   const content = args.content ?? ""
   const disabled = Boolean(args.disabled)
+  const rootStyle = useMemo(() => themeStyle(theme), [theme])
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [selectionStart, setSelectionStart] = useState(0)
@@ -75,13 +111,13 @@ function LatestMessageEditor(props: ComponentProps) {
   const canInsert = insertion.trim().length > 0
 
   return (
-    <section className="branch-writer-editor" aria-label="Latest assistant intervention editor">
+    <section className="branch-writer-editor" style={rootStyle} aria-label="Latest assistant intervention editor">
       <div className="branch-writer-header">
         <div>
-          <div className="branch-writer-kicker">Editable latest assistant message</div>
-          <h3>介入ポイントを選ぶ</h3>
+          <div className="branch-writer-kicker">Latest assistant</div>
+          <h3>途中から曲げる</h3>
         </div>
-        <div className="branch-writer-badge">latest only</div>
+        <div className="branch-writer-badge">editable</div>
       </div>
 
       <textarea
@@ -94,39 +130,39 @@ function LatestMessageEditor(props: ComponentProps) {
         onKeyUp={updateSelection}
         onSelect={updateSelection}
         onMouseUp={updateSelection}
-        rows={Math.min(Math.max(content.split("\n").length + 2, 9), 26)}
+        rows={Math.min(Math.max(content.split("\n").length + 2, 8), 22)}
       />
 
-      <div className="branch-writer-meta-row">
-        <span>cut: <code>{selectionStart}</code></span>
-        <span>end: <code>{selectionEnd}</code></span>
-        <span>selected: <code>{selectedLength}</code></span>
-      </div>
-
-      <div className="branch-writer-action-panel">
+      <div className="branch-writer-toolbar">
+        <div className="branch-writer-meta-row">
+          <span>cut <code>{selectionStart}</code></span>
+          <span>end <code>{selectionEnd}</code></span>
+          <span>selected <code>{selectedLength}</code></span>
+        </div>
         <button
-          className="branch-writer-primary"
+          className="branch-writer-button branch-writer-primary"
           type="button"
           disabled={disabled}
           onClick={() => emit("regenerate_from_here")}
         >
-          <span>ここから再生成</span>
-          <small>選択地点以降を破棄して続ける</small>
+          選択位置から再生成
         </button>
+      </div>
 
-        <div className="branch-writer-insert-card">
-          <label htmlFor="branch-writer-insertion">入力して続ける</label>
-          <textarea
-            id="branch-writer-insertion"
-            className="branch-writer-insertion"
-            value={insertion}
-            disabled={disabled}
-            onChange={onInsertionChange}
-            placeholder="ここに作者側の一文を入れる"
-            rows={3}
-          />
+      <div className="branch-writer-insert-card">
+        <label htmlFor="branch-writer-insertion">一文を入れて続ける</label>
+        <textarea
+          id="branch-writer-insertion"
+          className="branch-writer-insertion"
+          value={insertion}
+          disabled={disabled}
+          onChange={onInsertionChange}
+          placeholder="例: しかし、"
+          rows={2}
+        />
+        <div className="branch-writer-insert-actions">
           <button
-            className="branch-writer-secondary"
+            className="branch-writer-button branch-writer-secondary"
             type="button"
             disabled={disabled || !canInsert}
             onClick={() => emit("insert_and_continue")}
