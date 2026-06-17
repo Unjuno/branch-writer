@@ -12,11 +12,12 @@ _COMPONENT_NAME = "latest_message_editor"
 _COMPONENT_DIR = Path(__file__).parent
 _FRONTEND_DIR = _COMPONENT_DIR / "frontend"
 _BUILD_DIR = _FRONTEND_DIR / "build"
+_BUILD_INDEX = _BUILD_DIR / "index.html"
 _DEV_URL = os.environ.get("BRANCH_WRITER_COMPONENT_URL")
 
 if _DEV_URL:
     _component_func = components.declare_component(_COMPONENT_NAME, url=_DEV_URL)
-elif _BUILD_DIR.exists():
+elif _BUILD_INDEX.exists():
     _component_func = components.declare_component(_COMPONENT_NAME, path=str(_BUILD_DIR))
 else:
     _component_func = None
