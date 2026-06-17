@@ -87,6 +87,14 @@ def render_sidebar() -> None:
         step=1,
         disabled=is_generating,
     )
+    settings.request_timeout_seconds = st.sidebar.number_input(
+        "Request Timeout Seconds",
+        min_value=5,
+        max_value=900,
+        value=int(settings.request_timeout_seconds),
+        step=5,
+        disabled=is_generating,
+    )
 
     st.sidebar.divider()
     st.session_state["render_message_limit"] = st.sidebar.number_input(
