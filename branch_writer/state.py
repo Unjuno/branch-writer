@@ -30,6 +30,7 @@ def initialize_state(state: MutableMapping[str, Any]) -> None:
     state.setdefault("undo_stack", [])
     state.setdefault("is_generating", False)
     state.setdefault("last_error", None)
+    state.setdefault("last_intervention_request_id", None)
 
 
 def get_messages(state: MutableMapping[str, Any]) -> list[ChatMessage]:
