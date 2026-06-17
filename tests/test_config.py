@@ -4,6 +4,7 @@ from branch_writer.config import (
     DEFAULT_TEMPERATURE,
     LlmSettings,
     default_llm_settings,
+    normalize_openai_base_url,
     validate_llm_settings,
 )
 
@@ -56,3 +57,19 @@ def test_valid_settings_have_no_errors() -> None:
     )
 
     assert validate_llm_settings(settings) == []
+
+
+def test_normalize_openai_base_url_adds_v1_for_server_root() -> None:
+    assert normalize_openai_base_url("http://localhost:1234") == "http://localhost:1234/v1"
+
+
+def test_normalize_openai_base_url_preserves_existing_v1_path() -> None:
+    assert normalize_openai_base_url("http://localhost:1234/v1") == "http://localhost:1234/v1"
+
+
+def test_normalize_openai_base_url_trims_trailing_slash() -> None:
+    assert normalize_openai_base_url("http://localhost:1234/") == "http://localhost:1234/v1"
+
+
+def test_normalize_openai_base_url_preserves_custom_path() -> None:
+    assert normalize_openai_base_url("http://localhost:1234/api") == "http://localhost:1234/api"
