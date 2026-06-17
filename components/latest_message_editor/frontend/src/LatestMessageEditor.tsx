@@ -29,14 +29,21 @@ function LatestMessageEditor(props: ComponentProps) {
 
   useEffect(() => {
     Streamlit.setFrameHeight()
-  })
+  }, [content, insertion])
 
   const updateSelection = () => {
     const element = textareaRef.current
     if (!element) return
 
-    setSelectionStart(element.selectionStart)
-    setSelectionEnd(element.selectionEnd)
+    const nextStart = element.selectionStart
+    const nextEnd = element.selectionEnd
+
+    if (nextStart !== selectionStart) {
+      setSelectionStart(nextStart)
+    }
+    if (nextEnd !== selectionEnd) {
+      setSelectionEnd(nextEnd)
+    }
   }
 
   const emit = (action: InterventionAction) => {
@@ -56,7 +63,6 @@ function LatestMessageEditor(props: ComponentProps) {
 
   const onInsertionChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     setInsertion(event.target.value)
-    Streamlit.setFrameHeight()
   }
 
   return (
