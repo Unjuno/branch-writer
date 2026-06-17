@@ -83,7 +83,7 @@ streamlit run app.py
 | API Key | 空文字または任意のローカル用文字列 |
 | Model | ローカルLLM側で起動しているモデル名 |
 | Temperature | `0.7` |
-| Max Tokens | `512` |
+| Max Tokens | `4096` |
 
 ---
 
