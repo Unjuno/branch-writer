@@ -21,6 +21,8 @@ def test_initialize_state_sets_defaults() -> None:
     assert state["undo_stack"] == []
     assert state["is_generating"] is False
     assert state["last_error"] is None
+    assert state["last_intervention_request_id"] is None
+    assert state["render_message_limit"] == 80
 
 
 def test_initialize_state_preserves_existing_values() -> None:
@@ -32,6 +34,8 @@ def test_initialize_state_preserves_existing_values() -> None:
         "undo_stack": ["existing"],
         "is_generating": True,
         "last_error": "error",
+        "last_intervention_request_id": "request-1",
+        "render_message_limit": 120,
     }
 
     initialize_state(state)
@@ -41,6 +45,8 @@ def test_initialize_state_preserves_existing_values() -> None:
     assert state["undo_stack"] == ["existing"]
     assert state["is_generating"] is True
     assert state["last_error"] == "error"
+    assert state["last_intervention_request_id"] == "request-1"
+    assert state["render_message_limit"] == 120
 
 
 def test_get_messages_initializes_state() -> None:
