@@ -113,21 +113,21 @@ def render_context_usage() -> None:
     used_ratio = total_usage / ctx if ctx > 0 else 0
 
     st.sidebar.divider()
-    st.sidebar.caption("Model Context")
+    st.sidebar.caption("モデルコンテキスト")
 
     col1, col2, col3 = st.sidebar.columns(3)
-    col1.metric("Input~", f"{input_tokens:,}")
-    col2.metric("Output", f"{output_headroom:,}")
-    col3.metric("Limit", f"{ctx:,}")
+    col1.metric("入力~", f"{input_tokens:,}")
+    col2.metric("出力枠", f"{output_headroom:,}")
+    col3.metric("上限", f"{ctx:,}")
 
     bar_color = ""
     warn = ""
     if used_ratio >= 0.90:
         bar_color = "🔥 "
-        warn = "DANGER: Context nearly full!"
+        warn = "危険: コンテキストがほぼ一杯です！"
     elif used_ratio >= 0.70:
         bar_color = "⚠️ "
-        warn = "Warning: Context running low"
+        warn = "警告: コンテキスト残りわずか"
 
     progress_val = min(used_ratio, 1.0)
     pct = int(progress_val * 100)
@@ -138,28 +138,28 @@ def render_context_usage() -> None:
     )
 
     if warn:
-        if "DANGER" in warn:
+        if "危険" in warn:
             st.sidebar.error(warn)
         else:
             st.sidebar.warning(warn)
 
     if used_ratio >= 0.70:
-        st.sidebar.caption("💡 Clear chat or reduce Max Tokens to free up space.")
+        st.sidebar.caption("💡 チャットをクリアするか、Max Tokens を減らして空きを確保してください。")
 
 
 def render_sidebar() -> None:
     settings: LlmSettings = st.session_state["llm_settings"]
     is_generating = bool(st.session_state["is_generating"])
 
-    st.sidebar.header("LLM Settings")
-    placeholder = "Auto (Ollama / LM Studio)"
+    st.sidebar.header("LLM 設定")
+    placeholder = "自動 (Ollama / LM Studio)"
     settings.base_url = st.sidebar.text_input(
-        "API Base URL",
+        "API ベースURL",
         value=settings.base_url,
         placeholder=placeholder,
         disabled=is_generating,
     )
-    settings.api_key = st.sidebar.text_input("API Key", value=settings.api_key, type="password", disabled=is_generating)
+    settings.api_key = st.sidebar.text_input("API キー", value=settings.api_key, type="password", disabled=is_generating)
 
     if st.sidebar.button("🔄 モデル一覧を再取得", disabled=is_generating, key="discover_models_btn"):
         with st.spinner("モデル一覧を取得中..."):
@@ -175,7 +175,7 @@ def render_sidebar() -> None:
         model_names = [m["name"] for m in available]
         current = settings.model if settings.model in model_names else model_names[0]
         selected = st.sidebar.selectbox(
-            "Model",
+            "モデル",
             options=model_names,
             index=model_names.index(current),
             disabled=is_generating,
@@ -189,21 +189,40 @@ def render_sidebar() -> None:
             settings.model = selected
     else:
         prev = settings.model
-        settings.model = st.sidebar.text_input("Model", value=settings.model, disabled=is_generating)
+        settings.model = st.sidebar.text_input("モデル名", value=settings.model, disabled=is_generating)
         if settings.model != prev:
             ctx, out = lookup_model_capabilities(settings.model)
             settings.context_window = ctx
             settings.max_tokens = out
-    settings.temperature = st.sidebar.slider("Temperature", min_value=0.0, max_value=2.0, value=float(settings.temperature), step=0.1, disabled=is_generating)
-    settings.max_tokens = st.sidebar.number_input("Max Tokens (output)", min_value=1, max_value=32768, value=int(settings.max_tokens), step=1, disabled=is_generating)
-    settings.context_window = st.sidebar.number_input("Context Window (model limit)", min_value=512, max_value=1048576, value=int(settings.context_window), step=512, disabled=is_generating)
-    settings.request_timeout_seconds = st.sidebar.number_input("Request Timeout Seconds", min_value=5, max_value=900, value=int(settings.request_timeout_seconds), step=5, disabled=is_generating)
+    settings.temperature = st.sidebar.slider("温度 (Temperature)", min_value=0.0, max_value=2.0, value=float(settings.temperature), step=0.1, disabled=is_generating)
+
+    # context_window だけ表示、max_tokens は自動計算
+    settings.context_window = st.sidebar.number_input(
+        "コンテキストウィンドウ",
+        min_value=512,
+        max_value=1048576,
+        value=int(settings.context_window),
+        step=512,
+        disabled=is_generating,
+    )
+    derived = min(int(settings.context_window * 0.5), 16384)
+    if settings.max_tokens != derived:
+        settings.max_tokens = derived
+    st.sidebar.caption(f"出力トークン上限: {settings.max_tokens:,}（コンテキストの約50%）")
+    settings.request_timeout_seconds = st.sidebar.number_input(
+        "リクエストタイムアウト（秒）",
+        min_value=5,
+        max_value=900,
+        value=int(settings.request_timeout_seconds),
+        step=5,
+        disabled=is_generating,
+    )
 
     render_context_usage()
 
     st.sidebar.divider()
     st.session_state["render_message_limit"] = st.sidebar.number_input(
-        "Rendered message limit",
+        "表示メッセージ数",
         min_value=MIN_RENDER_MESSAGE_LIMIT,
         max_value=MAX_RENDER_MESSAGE_LIMIT,
         value=int(st.session_state.get("render_message_limit", DEFAULT_RENDER_MESSAGE_LIMIT)),
@@ -216,24 +235,24 @@ def render_sidebar() -> None:
         st.sidebar.warning("\n".join(errors))
 
     st.sidebar.divider()
-    if st.sidebar.button("Undo last intervention", disabled=is_generating or not st.session_state["undo_stack"]):
+    if st.sidebar.button("直前の介入を取り消す", disabled=is_generating or not st.session_state["undo_stack"]):
         undo_last_intervention()
         st.rerun()
 
-    if st.sidebar.button("Clear chat", disabled=is_generating):
+    if st.sidebar.button("チャットをクリア", disabled=is_generating):
         reset_chat_state()
         st.rerun()
 
     insertion_log: list[dict[str, str]] = st.session_state.get("insertion_log", [])
     if insertion_log:
         st.sidebar.divider()
-        st.sidebar.caption("Insertion Log")
+        st.sidebar.caption("挿入履歴")
         for i, entry in enumerate(insertion_log):
             text = entry["text"]
             label = text[:30] + "..." if len(text) > 30 else text
             cols = st.sidebar.columns([4, 1])
             cols[0].text(f"{i+1}. {label}")
-            if cols[1].button("使用", key=f"reuse-insertion-{i}"):
+            if cols[1].button("再利用", key=f"reuse-insertion-{i}"):
                 st.session_state["reuse_insertion"] = text
                 st.rerun()
 
@@ -325,7 +344,7 @@ def render_messages() -> None:
     visible_messages = messages[-limit:]
 
     if hidden_count:
-        st.caption(f"Older messages hidden for performance: {hidden_count}")
+        st.caption(f"パフォーマンスのため古いメッセージ{hidden_count}件を非表示")
 
     for index, message in enumerate(visible_messages):
         if message.role == "assistant" and message.status == "streaming":
@@ -458,7 +477,7 @@ def _event_request_id(event: dict[str, Any]) -> str:
     request_id = event.get("requestId")
     if isinstance(request_id, str) and request_id:
         return request_id
-    return _event_fingerprint(event)
+    return repr((event.get("action"), event.get("messageId"), event.get("selectionStart"), event.get("insertion") or ""))
 
 
 def handle_intervention_event(event: dict[str, Any]) -> bool:
