@@ -15,8 +15,8 @@ from branch_writer.intervention import (
 )
 from branch_writer.llm import (
     LlmError,
-    generate_chat_response,
-    generate_intervention_continuation,
+    iter_chat_response,
+    iter_intervention_continuation,
 )
 from branch_writer.messages import (
     ChatMessage,
@@ -38,6 +38,7 @@ VALID_INTERVENTION_ACTIONS = {"regenerate_from_here", "insert_and_continue"}
 DEFAULT_RENDER_MESSAGE_LIMIT = 80
 MIN_RENDER_MESSAGE_LIMIT = 10
 MAX_RENDER_MESSAGE_LIMIT = 500
+CURSOR = "▌"
 
 
 def reset_chat_state() -> None:
@@ -215,8 +216,18 @@ def render_messages() -> dict[str, Any] | None:
     return event
 
 
+def _stream_to_placeholder(message: ChatMessage, placeholder: Any, chunks: Any) -> str:
+    content = message.content
+    for chunk in chunks:
+        content += chunk
+        message.content = content
+        placeholder.markdown(content + CURSOR)
+    placeholder.markdown(content)
+    return content
+
+
 def handle_user_prompt(prompt: str) -> None:
-    """Append a user prompt and generate an assistant response."""
+    """Append a user prompt and stream an assistant response."""
     messages: list[ChatMessage] = st.session_state["messages"]
     settings: LlmSettings = st.session_state["llm_settings"]
 
@@ -224,26 +235,29 @@ def handle_user_prompt(prompt: str) -> None:
     set_error(st.session_state, None)
     set_generating(st.session_state, True)
 
-    try:
-        response = generate_chat_response(messages, settings)
-    except LlmError as exc:
-        set_error(st.session_state, str(exc))
-        append_assistant_message(
-            messages,
-            "ローカルLLMへの接続または生成に失敗しました。サイドバーの設定を確認してください。",
-            status="error",
-        )
-    except Exception as exc:  # pragma: no cover - defensive Streamlit guard
-        set_error(st.session_state, f"Unexpected generation error: {type(exc).__name__}: {exc}")
-        append_assistant_message(
-            messages,
-            "予期しないエラーで生成に失敗しました。エラー表示を確認してください。",
-            status="error",
-        )
-    else:
-        append_assistant_message(messages, response)
-    finally:
-        set_generating(st.session_state, False)
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    assistant = append_assistant_message(messages, "", status="streaming")
+
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        try:
+            chunks = iter_chat_response(messages[:-1], settings)
+            _stream_to_placeholder(assistant, placeholder, chunks)
+            assistant.status = "complete"
+        except LlmError as exc:
+            set_error(st.session_state, str(exc))
+            assistant.content = "ローカルLLMへの接続または生成に失敗しました。サイドバーの設定を確認してください。"
+            assistant.status = "error"
+            placeholder.markdown(assistant.content)
+        except Exception as exc:  # pragma: no cover - defensive Streamlit guard
+            set_error(st.session_state, f"Unexpected generation error: {type(exc).__name__}: {exc}")
+            assistant.content = "予期しないエラーで生成に失敗しました。エラー表示を確認してください。"
+            assistant.status = "error"
+            placeholder.markdown(assistant.content)
+        finally:
+            set_generating(st.session_state, False)
 
 
 def _event_fingerprint(event: dict[str, Any]) -> str:
@@ -321,12 +335,27 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
 
     try:
         prefix = before_content[:selection_start]
-        continuation = generate_intervention_continuation(
-            frozen_messages=frozen_messages_before_latest(messages),
-            assistant_prefix=prefix,
-            insertion=insertion if action == "insert_and_continue" else "",
-            settings=settings,
-        )
+        effective_insertion = insertion if action == "insert_and_continue" else ""
+        base_content = prefix + effective_insertion
+        latest.content = base_content
+        latest.status = "streaming"
+
+        with st.chat_message("assistant"):
+            st.caption("Streaming revised continuation")
+            placeholder = st.empty()
+            placeholder.markdown(base_content + CURSOR)
+            chunks = iter_intervention_continuation(
+                frozen_messages=frozen_messages_before_latest(messages),
+                assistant_prefix=prefix,
+                insertion=effective_insertion,
+                settings=settings,
+            )
+            continuation = ""
+            for chunk in chunks:
+                continuation += chunk
+                latest.content = base_content + continuation
+                placeholder.markdown(latest.content + CURSOR)
+            placeholder.markdown(latest.content)
 
         if action == "regenerate_from_here":
             result = regenerate_from_here(before_content, selection_start, continuation)
@@ -334,6 +363,7 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
             result = insert_and_continue(before_content, selection_start, insertion, continuation)
 
         latest.content = result.next_content
+        latest.status = "complete"
         push_undo_snapshot(
             st.session_state,
             message_id=latest.id,
@@ -342,8 +372,12 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
             action=str(action),
         )
     except (LlmError, TypeError, ValueError) as exc:
+        latest.content = before_content
+        latest.status = "complete"
         set_error(st.session_state, str(exc))
     except Exception as exc:  # pragma: no cover - defensive Streamlit guard
+        latest.content = before_content
+        latest.status = "complete"
         set_error(st.session_state, f"Unexpected intervention error: {type(exc).__name__}: {exc}")
     finally:
         set_generating(st.session_state, False)
@@ -364,6 +398,7 @@ def undo_last_intervention() -> None:
         return
 
     messages[-1].content = snapshot.before_content
+    messages[-1].status = "complete"
     st.session_state["last_intervention_request_id"] = None
     set_error(st.session_state, None)
 
@@ -389,8 +424,7 @@ def main() -> None:
 
     prompt = st.chat_input("メッセージを入力", disabled=bool(st.session_state["is_generating"]))
     if prompt:
-        with st.spinner("Generating..."):
-            handle_user_prompt(prompt)
+        handle_user_prompt(prompt)
         st.rerun()
 
 
