@@ -1,5 +1,5 @@
 import React, { ChangeEvent, useEffect, useRef, useState } from "react"
-import { ComponentProps, Streamlit } from "@streamlit/component-lib"
+import { ComponentProps, Streamlit } from "streamlit-component-lib"
 
 type InterventionAction = "regenerate_from_here" | "insert_and_continue"
 
