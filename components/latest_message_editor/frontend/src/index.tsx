@@ -1,6 +1,6 @@
 import React from "react"
 import ReactDOM from "react-dom/client"
-import { Streamlit, withStreamlitConnection } from "@streamlit/component-lib"
+import { Streamlit, withStreamlitConnection } from "streamlit-component-lib"
 import LatestMessageEditor from "./LatestMessageEditor"
 import "./style.css"
 
