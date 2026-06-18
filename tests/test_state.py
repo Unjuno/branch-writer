@@ -11,6 +11,15 @@ from branch_writer.state import (
 )
 
 
+class LegacySettings:
+    def __init__(self) -> None:
+        self.base_url = "http://localhost:1234/v1"
+        self.api_key = ""
+        self.model = "legacy-model"
+        self.temperature = 0.4
+        self.max_tokens = 1024
+
+
 def test_initialize_state_sets_defaults() -> None:
     state = {}
 
@@ -26,6 +35,25 @@ def test_initialize_state_sets_defaults() -> None:
     assert state["available_models"] == []
     assert state["insertion_log"] == []
     assert state["reuse_insertion"] is None
+    assert state["streaming_intervention"] is None
+    assert state["kw_filter"]["enabled"] is True
+    assert state["validator"]["enabled"] is False
+
+
+def test_initialize_state_migrates_legacy_llm_settings() -> None:
+    state = {"llm_settings": LegacySettings()}
+
+    initialize_state(state)
+
+    settings = state["llm_settings"]
+    assert isinstance(settings, LlmSettings)
+    assert settings.base_url == "http://localhost:1234/v1"
+    assert settings.model == "legacy-model"
+    assert settings.temperature == 0.4
+    assert settings.max_tokens == 1024
+    assert hasattr(settings, "context_window")
+    assert hasattr(settings, "request_timeout_seconds")
+    assert hasattr(settings, "system_prompt")
 
 
 def test_initialize_state_preserves_existing_values() -> None:
@@ -50,6 +78,24 @@ def test_initialize_state_preserves_existing_values() -> None:
     assert state["last_error"] == "error"
     assert state["last_intervention_request_id"] == "request-1"
     assert state["render_message_limit"] == 120
+
+
+def test_initialize_state_repairs_partial_nested_dicts() -> None:
+    state = {
+        "kw_filter": {"enabled": False},
+        "validator": {"prompt": "check {text}"},
+    }
+
+    initialize_state(state)
+
+    assert state["kw_filter"]["enabled"] is False
+    assert state["kw_filter"]["words"] == ""
+    assert state["kw_filter"]["max_retries"] == 5
+    assert state["kw_filter"]["retry_count"] == 0
+    assert state["validator"]["prompt"] == "check {text}"
+    assert state["validator"]["enabled"] is False
+    assert state["validator"]["results"] is None
+    assert state["validator"]["error"] is None
 
 
 def test_get_messages_initializes_state() -> None:
