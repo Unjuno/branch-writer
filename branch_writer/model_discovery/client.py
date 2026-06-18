@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger("branch_writer.model_discovery")
 
 
 def discover_models_sync(base_url: str) -> list[dict[str, Any]]:
@@ -16,21 +19,27 @@ def discover_models_sync(base_url: str) -> list[dict[str, Any]]:
     if not stripped:
         return []
 
+    logger.info("discover_models_sync: base_url=%s", stripped)
     models = _try_ollama(stripped)
     if models:
+        logger.info("discover_models_sync: found %d models via Ollama", len(models))
         return models
 
-    return _try_openai(stripped)
+    models = _try_openai(stripped)
+    logger.info("discover_models_sync: found %d models via OpenAI-compat", len(models))
+    return models
 
 
 def _try_ollama(base_url: str) -> list[dict[str, Any]]:
     """Fetch models from Ollama's /api/tags endpoint."""
     url = _ollama_tags_url(base_url)
     try:
+        logger.debug("_try_ollama: GET %s", url)
         resp = httpx.get(url, timeout=5)
         resp.raise_for_status()
         data = resp.json()
-    except Exception:
+    except Exception as exc:
+        logger.debug("_try_ollama: failed — %s", exc)
         return []
 
     models: list[dict[str, Any]] = []
@@ -50,10 +59,12 @@ def _try_openai(base_url: str) -> list[dict[str, Any]]:
     """Fetch models from OpenAI-compatible /v1/models endpoint (LM Studio etc.)."""
     url = _openai_models_url(base_url)
     try:
+        logger.debug("_try_openai: GET %s", url)
         resp = httpx.get(url, timeout=5)
         resp.raise_for_status()
         data = resp.json()
-    except Exception:
+    except Exception as exc:
+        logger.debug("_try_openai: failed — %s", exc)
         return []
 
     models: list[dict[str, Any]] = []

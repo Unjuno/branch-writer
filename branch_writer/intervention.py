@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger("branch_writer.intervention")
 
 
 @dataclass(slots=True, frozen=True)
@@ -47,6 +50,7 @@ def strip_continuation_overlap(base: str, continuation: str, max_overlap: int = 
     max_len = min(len(base), len(continuation), max_overlap)
     for overlap_len in range(max_len, 0, -1):
         if base[-overlap_len:] == continuation[:overlap_len]:
+            logger.debug("strip_continuation_overlap: removed %d overlapping chars", overlap_len)
             return continuation[overlap_len:]
 
     return continuation
@@ -58,6 +62,8 @@ def regenerate_from_here(
     continuation: str,
 ) -> InterventionResult:
     """Discard content after selection_start and append a new continuation."""
+    logger.info("regenerate_from_here: selection_start=%d, content=%d chars, continuation=%d chars",
+                selection_start, len(content), len(continuation))
     prefix, discarded = split_at_selection(content, selection_start)
     clean_continuation = strip_continuation_overlap(prefix, continuation)
     next_content = prefix + clean_continuation
@@ -77,6 +83,8 @@ def insert_and_continue(
     continuation: str,
 ) -> InterventionResult:
     """Insert user text at selection_start and append a new continuation."""
+    logger.info("insert_and_continue: selection_start=%d, insertion=%d chars, continuation=%d chars",
+                selection_start, len(insertion), len(continuation))
     prefix, discarded = split_at_selection(content, selection_start)
     base = prefix + insertion
     clean_continuation = strip_continuation_overlap(base, continuation)

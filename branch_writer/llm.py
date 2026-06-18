@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from typing import Any
 
@@ -14,6 +15,8 @@ from branch_writer.config import (
     validate_llm_settings,
 )
 from branch_writer.messages import ChatMessage, to_openai_messages
+
+logger = logging.getLogger("branch_writer.llm")
 
 
 class LlmError(RuntimeError):
@@ -61,6 +64,8 @@ def _iter_chat_completion_chunks(
     payload = _chat_payload(api_messages=api_messages, settings=settings, stream=True)
     url = _chat_completions_url(settings)
     timeout_seconds = settings.request_timeout_seconds
+    logger.info("_iter_chat_completion_chunks: POST %s (model=%s, msgs=%d, timeout=%ds)",
+                url, settings.model, len(api_messages), timeout_seconds)
 
     try:
         with httpx.stream(
@@ -72,8 +77,10 @@ def _iter_chat_completion_chunks(
         ) as response:
             if response.status_code >= 400:
                 body = response.read().decode("utf-8", errors="replace")[:2000]
+                logger.error("_iter_chat_completion_chunks: HTTP %d — %s", response.status_code, body[:200])
                 raise LlmError(f"LLM HTTP {response.status_code}: {body}")
 
+            chunk_count = 0
             for line in response.iter_lines():
                 if not line:
                     continue
@@ -82,6 +89,7 @@ def _iter_chat_completion_chunks(
                     line = line.removeprefix("data:").strip()
 
                 if line == "[DONE]":
+                    logger.debug("_iter_chat_completion_chunks: [DONE] received after %d chunks", chunk_count)
                     break
 
                 try:
@@ -91,12 +99,15 @@ def _iter_chat_completion_chunks(
 
                 chunk = _extract_delta_content(data)
                 if chunk:
+                    chunk_count += 1
                     yield chunk
     except LlmError:
         raise
     except httpx.TimeoutException as exc:
+        logger.error("_iter_chat_completion_chunks: timeout after %ds: %s", timeout_seconds, url)
         raise LlmError(f"LLM stream timed out after {timeout_seconds:.0f}s: {url}") from exc
     except httpx.RequestError as exc:
+        logger.error("_iter_chat_completion_chunks: request error: %s", exc)
         raise LlmError(f"LLM stream failed: {exc}") from exc
 
 
@@ -131,20 +142,29 @@ def _extract_delta_content(data: dict[str, Any]) -> str:
 
 def generate_text(prompt: str, settings: LlmSettings) -> str:
     """Generate a one-shot text response without mutating conversation state."""
+    logger.info("generate_text: prompt=%d chars", len(prompt))
     msg = ChatMessage(role="user", content=prompt)
     return "".join(iter_chat_response([msg], settings))
+
+
+def _batch_chars(text: str, batch_size: int = 3) -> Iterator[str]:
+    """Yield text in fixed-size character batches."""
+    for i in range(0, len(text), batch_size):
+        yield text[i:i + batch_size]
 
 
 def iter_chat_response(
     messages: list[ChatMessage],
     settings: LlmSettings,
 ) -> Iterator[str]:
-    """Yield a normal assistant response as streaming chunks."""
+    """Yield a normal assistant response in small character batches."""
+    logger.info("iter_chat_response: %d messages, model=%s", len(messages), settings.model)
     _validate_or_raise(settings)
-    yield from _iter_chat_completion_chunks(
+    for chunk in _iter_chat_completion_chunks(
         api_messages=to_openai_messages(messages, system_prompt=settings.system_prompt),
         settings=settings,
-    )
+    ):
+        yield from _batch_chars(chunk)
 
 
 def _intervention_messages(
@@ -165,15 +185,15 @@ def iter_intervention_continuation(
     insertion: str,
     settings: LlmSettings,
 ) -> Iterator[str]:
-    """Yield an intervention continuation as streaming chunks."""
+    """Yield an intervention continuation in small character batches."""
+    logger.info("iter_intervention_continuation: prefix=%d chars, insertion=%d chars, model=%s",
+                len(assistant_prefix), len(insertion), settings.model)
     _validate_or_raise(settings)
-    yield from _iter_chat_completion_chunks(
+    for chunk in _iter_chat_completion_chunks(
         api_messages=_intervention_messages(
             frozen_messages, assistant_prefix, insertion,
             system_prompt=settings.system_prompt,
         ),
         settings=settings,
-    )
-
-
-
+    ):
+        yield from _batch_chars(chunk)

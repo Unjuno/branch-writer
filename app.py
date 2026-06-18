@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 import streamlit as st
 
-from branch_writer.config import LlmSettings, lookup_model_capabilities, validate_llm_settings
-from branch_writer.model_discovery import discover_models_sync
+from branch_writer.config import (
+    LlmSettings,
+    lookup_model_capabilities,
+    validate_llm_settings,
+)
 from branch_writer.intervention import (
-    insert_and_continue,
-    regenerate_from_here,
-    strip_continuation_overlap,
     validate_selection_start,
 )
 from branch_writer.llm import (
-    LlmError,
     generate_text,
-    iter_chat_response,
-    iter_intervention_continuation,
 )
 from branch_writer.messages import (
     ChatMessage,
@@ -29,13 +29,7 @@ from branch_writer.messages import (
     frozen_messages_before_latest,
     is_intervenable,
 )
-from branch_writer.code_validator import (
-    TEMPLATES,
-    VALIDATOR_HELP,
-    VALIDATOR_EXTRA_DOCS,
-    execute_validator_code,
-    code_generation_prompt,
-)
+from branch_writer.model_discovery import discover_models_sync
 from branch_writer.state import (
     initialize_state,
     pop_undo_snapshot,
@@ -43,6 +37,21 @@ from branch_writer.state import (
     set_error,
     set_generating,
 )
+from branch_writer.streaming_server import start_server
+from components.latest_message_editor import component_available, latest_message_editor
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("branch_writer.log", encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger("branch_writer.app")
+
+_STREAMING_PORT = 8765
+_STREAMING_URL = f"http://127.0.0.1:{_STREAMING_PORT}"
 
 VALID_INTERVENTION_ACTIONS = {"regenerate_from_here", "insert_and_continue"}
 DEFAULT_RENDER_MESSAGE_LIMIT = 80
@@ -56,14 +65,6 @@ _DEFAULT_ENDPOINTS = [
     "http://localhost:1234/v1",    # LM Studio
 ]
 
-_CODE_PANEL_STATE_KEYS = [
-    "code_panel_code",
-    "code_panel_template",
-    "code_panel_result",
-    "code_panel_error",
-    "_code_checked_msg_id",
-]
-
 
 def _inject_custom_css() -> None:
     if st.session_state.get("_custom_css_injected"):
@@ -71,11 +72,6 @@ def _inject_custom_css() -> None:
     st.session_state["_custom_css_injected"] = True
     st.markdown(
         """<style>
-.bw-cursor {
-    animation: bw-blink 0.9s step-end infinite;
-    color: var(--primary-color);
-    font-weight: bold;
-}
 @keyframes bw-blink {
     50% { opacity: 0; }
 }
@@ -83,28 +79,39 @@ def _inject_custom_css() -> None:
 .bw-thinking {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 2px 10px;
-    border-radius: 12px;
-    background: #ff4b4b;
+    gap: 8px;
+    padding: 4px 14px;
+    border-radius: 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
-    font-size: 0.85rem;
+    font-size: 0.9rem;
     font-weight: 600;
-    animation: bw-pulse 1.5s ease-in-out infinite;
+    box-shadow: 0 2px 8px rgba(102,126,234,0.4);
 }
-@keyframes bw-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
+.bw-thinking::after {
+    content: "";
+    width: 8px;
+    height: 8px;
+    margin-left: 4px;
+    border-radius: 50%;
+    background: white;
+    animation: bw-dot 1.2s ease-in-out infinite;
+}
+@keyframes bw-dot {
+    0%, 100% { opacity: 0.3; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.2); }
 }
 
-.code-panel {
-    border-left: 1px solid rgba(128,128,128,0.2);
-    padding-left: 1rem;
+.bw-cursor {
+    animation: bw-blink 0.9s step-end infinite;
+    color: var(--primary-color);
+    font-weight: bold;
+    font-size: 1.1em;
 }
-.code-panel .stTextArea textarea {
-    font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
-    font-size: 0.8rem;
-    line-height: 1.4;
+
+[data-testid="stSidebar"] {
+    min-width: 480px !important;
+    max-width: 720px !important;
 }
 </style>""",
         unsafe_allow_html=True,
@@ -117,25 +124,30 @@ def _cursor_span() -> str:
 
 def _probe_base_url(url: str) -> str:
     if url.strip():
+        logger.debug("_probe_base_url: already set, returning %s", url)
         return url
     import httpx
     for candidate in _DEFAULT_ENDPOINTS:
         try:
-            resp = httpx.get(f"{candidate.rstrip('/v1')}/api/tags", timeout=2)
+            resp = httpx.get(f"{candidate.removesuffix('/v1')}/api/tags", timeout=2)
             if resp.status_code < 500:
+                logger.info("_probe_base_url: found Ollama at %s", candidate)
                 return candidate
         except Exception:
             try:
                 resp = httpx.get(f"{candidate}/models", timeout=2)
                 if resp.status_code < 500:
+                    logger.info("_probe_base_url: found OpenAI-compat at %s", candidate)
                     return candidate
             except Exception:
                 continue
+    logger.warning("_probe_base_url: no endpoint found")
     return url
 
 
-def estimate_tokens(text: str) -> int:
-    return max(len(text) // _CHARS_PER_TOKEN_ESTIMATE, 0)
+def estimate_tokens(text: str | int) -> int:
+    char_count = len(text) if isinstance(text, str) else text
+    return max(char_count // _CHARS_PER_TOKEN_ESTIMATE, 0)
 
 
 def render_context_usage() -> None:
@@ -200,7 +212,9 @@ def render_sidebar() -> None:
         placeholder=placeholder,
         disabled=is_generating,
     )
-    settings.api_key = st.sidebar.text_input("API キー", value=settings.api_key, type="password", disabled=is_generating)
+    settings.api_key = st.sidebar.text_input(
+        "API キー", value=settings.api_key, type="password", disabled=is_generating
+    )
 
     settings.system_prompt = st.sidebar.text_area(
         "システムプロンプト",
@@ -243,7 +257,10 @@ def render_sidebar() -> None:
             ctx, out = lookup_model_capabilities(settings.model)
             settings.context_window = ctx
             settings.max_tokens = out
-    settings.temperature = st.sidebar.slider("温度 (Temperature)", min_value=0.0, max_value=2.0, value=float(settings.temperature), step=0.1, disabled=is_generating)
+    settings.temperature = st.sidebar.slider(
+        "温度 (Temperature)", min_value=0.0, max_value=2.0,
+        value=float(settings.temperature), step=0.1, disabled=is_generating,
+    )
 
     # context_window のみ表示し、max_tokens は自動計算する
     settings.context_window = st.sidebar.number_input(
@@ -305,8 +322,13 @@ def render_sidebar() -> None:
                 st.session_state["reuse_insertion"] = text
                 st.rerun()
 
+    st.sidebar.divider()
+    st.sidebar.markdown("---")
+    render_validator_panel()
+
 
 def reset_chat_state() -> None:
+    logger.info("reset_chat_state: clearing all session state")
     st.session_state["messages"] = []
     st.session_state["undo_stack"] = []
     st.session_state["last_error"] = None
@@ -314,11 +336,14 @@ def reset_chat_state() -> None:
     st.session_state["last_intervention_request_id"] = None
     st.session_state["insertion_log"] = []
     st.session_state["reuse_insertion"] = None
-    st.session_state["streaming_generator"] = None
     st.session_state["streaming_intervention"] = None
-    st.session_state["_in_intervention_streaming"] = False
     st.session_state["available_models"] = []
-    st.session_state["_code_checked_msg_id"] = None
+    st.session_state["kw_filter"]["retry_count"] = 0
+    st.session_state["validator"]["error"] = None
+    st.session_state["kw_filter"]["enabled"] = True
+    st.session_state["kw_filter"]["words"] = ""
+    st.session_state["kw_filter"]["max_retries"] = 5
+    st.session_state["validator"]["results"] = None
 
 
 def render_frozen_message(message: ChatMessage) -> None:
@@ -336,8 +361,6 @@ def render_intervention_panel() -> dict[str, Any] | None:
     latest = messages[-1]
     if not is_intervenable(messages, latest.id):
         return None
-    if st.session_state.get("_in_intervention_streaming"):
-        return None
 
     st.divider()
     st.caption("✂️ 介入 — スライダーで位置を選んで書き換え")
@@ -351,8 +374,6 @@ def render_intervention_panel() -> dict[str, Any] | None:
         key=f"intervention-slider-{latest.id}",
     )
 
-    # プレビュー表示
-    prefix = latest.content[:selection_start]
     suffix = latest.content[selection_start:]
     if suffix:
         short = suffix[:120].replace("\n", "↵")
@@ -395,8 +416,134 @@ def render_messages() -> None:
     if hidden_count:
         st.caption(f"パフォーマンスのため古いメッセージ{hidden_count}件を非表示")
 
+    # Prepare messages for streaming (exclude the last assistant message being generated)
+    settings: LlmSettings = st.session_state["llm_settings"]
+    messages_for_stream = []
+    if messages and messages[-1].role == "assistant" and messages[-1].status == "streaming":
+        # During generation, send all messages except the streaming one
+        messages_for_stream = [
+            {"role": m.role, "content": m.content, "id": m.id}
+            for m in messages[:-1]
+        ]
+    else:
+        messages_for_stream = [
+            {"role": m.role, "content": m.content, "id": m.id}
+            for m in messages
+        ]
+
+    llm_settings_dict = {
+        "base_url": settings.base_url,
+        "api_key": settings.api_key,
+        "model": settings.model,
+        "temperature": settings.temperature,
+        "max_tokens": settings.max_tokens,
+        "system_prompt": settings.system_prompt,
+        "request_timeout_seconds": settings.request_timeout_seconds,
+        "context_window": settings.context_window,
+    }
+
     for index, message in enumerate(visible_messages):
-        if message.role == "assistant" and message.status == "streaming":
+        is_latest_intervenable = is_intervenable(messages, message.id)
+
+        if is_latest_intervenable and component_available():
+            in_intervention = st.session_state.get("streaming_intervention") is not None
+            generating = bool(st.session_state["is_generating"])
+            disabled = in_intervention
+            can_intervene = not disabled
+
+            intervention_data = None
+            if in_intervention:
+                intervention_state = st.session_state.get("streaming_intervention", {})
+                if intervention_state:
+                    frozen = intervention_state.get("frozen_messages", [])
+                    intervention_data = {
+                        "frozenMessages": [
+                            {"role": m.role, "content": m.content, "id": m.id}
+                            for m in frozen
+                        ],
+                        "assistantPrefix": intervention_state.get("assistant_prefix", ""),
+                        "insertion": intervention_state.get("insertion", ""),
+                        "action": intervention_state.get("action", "regenerate_from_here"),
+                        "beforeContent": intervention_state.get("before_content", ""),
+                        "selectionStart": intervention_state.get("selection_start", 0),
+                    }
+
+            # インタベンションボタンをチャットの上に表示
+            if can_intervene:
+                sel = st.session_state.get(f"_selected_line_{message.id}", len(message.content))
+                at_end = sel >= len(message.content)
+
+                st.caption(f"📍 カーソル位置: {sel} / {len(message.content)} 文字目")
+                btn_cols = st.columns([1, 3, 1])
+                with btn_cols[0]:
+                    btn_label = "全文再生成" if at_end else "✂ ここから再生成"
+                    effective_sel = 0 if at_end else sel
+                    if st.button(btn_label, key=f"regen-{message.id}"):
+                        event = {
+                            "requestId": f"{message.id}:regenerate:{__import__('time').time()}",
+                            "action": "regenerate_from_here",
+                            "messageId": message.id,
+                            "selectionStart": effective_sel,
+                            "selectionEnd": effective_sel,
+                        }
+                        st.session_state["_intervention_event"] = event
+                        st.rerun()
+                with btn_cols[1]:
+                    insertion = st.text_input(
+                        "挿入テキスト",
+                        value="",
+                        placeholder="ここにテキストを入力...",
+                        key=f"insert-input-{message.id}",
+                        label_visibility="collapsed",
+                    )
+                with btn_cols[2]:
+                    if insertion.strip():
+                        if st.button("挿入して続ける", key=f"insert-{message.id}"):
+                            event = {
+                                "requestId": f"{message.id}:insert:{__import__('time').time()}",
+                                "action": "insert_and_continue",
+                                "messageId": message.id,
+                                "selectionStart": sel,
+                                "selectionEnd": sel,
+                                "insertion": insertion,
+                            }
+                            st.session_state["_intervention_event"] = event
+                            st.rerun()
+
+            with st.chat_message("assistant"):
+                logger.info("render_messages: editor msg=%s, streaming=%s, has_intervention=%s",
+                            message.id, generating, intervention_data is not None)
+                event = latest_message_editor(
+                    message_id=message.id,
+                    content=message.content,
+                    disabled=disabled,
+                    streaming_url=_STREAMING_URL,
+                    is_streaming=generating,
+                    intervention_data=intervention_data,
+                    messages_for_stream=messages_for_stream,
+                    llm_settings=llm_settings_dict,
+                    key=f"editor-{message.id}",
+                )
+                if event:
+                    event_type = event.get("type")
+                    if event_type == "streaming_done":
+                        if not st.session_state.get("is_generating", False):
+                            logger.debug("render_messages: stale streaming_done, skipping")
+                        else:
+                            intervention_before = st.session_state.get("streaming_intervention")
+                            retried = handle_streaming_complete(event)
+                            st.session_state.pop(f"editor-{message.id}", None)
+                            if retried or intervention_before is not None:
+                                logger.info(
+                                    "render_messages: rerun after streaming_done "
+                                    "(retried=%s, had_intervention=%s)",
+                                    retried,
+                                    intervention_before is not None,
+                                )
+                                st.rerun()
+                    elif event_type == "line_selected":
+                        st.session_state[f"_selected_line_{message.id}"] = event.get("selectionStart", 0)
+        elif message.role == "assistant" and message.status == "streaming":
             with st.chat_message("assistant"):
                 content = message.content
                 if content:
@@ -407,31 +554,29 @@ def render_messages() -> None:
 
 
 def _finalize_intervention(state: dict[str, Any]) -> None:
-    """Finalize an intervention after streaming completes."""
+    """Finalize an intervention after streaming completes.
+
+    latest.content already contains the full streamed content set by
+    handle_streaming_complete. We only push an undo snapshot and log.
+    """
+    logger.info("_finalize_intervention: action=%s, selection_start=%d", state["action"], state["selection_start"])
     messages: list[ChatMessage] = st.session_state["messages"]
     if not messages:
         return
     latest = messages[-1]
 
     before_content = state["before_content"]
-    selection_start = state["selection_start"]
     insertion = state["insertion"]
-    clean_continuation = state["clean_continuation"]
     action = state["action"]
 
-    if action == "regenerate_from_here":
-        result = regenerate_from_here(before_content, selection_start, clean_continuation)
-    else:
-        result = insert_and_continue(before_content, selection_start, insertion, clean_continuation)
-
-    latest.content = result.next_content
-    latest.status = "complete"
+    after_content = latest.content
+    logger.info("_finalize_intervention: using latest.content=%d chars (not rebuilding)", len(after_content))
 
     push_undo_snapshot(
         st.session_state,
         message_id=latest.id,
         before_content=before_content,
-        after_content=latest.content,
+        after_content=after_content,
         action=str(action),
     )
 
@@ -440,70 +585,165 @@ def _finalize_intervention(state: dict[str, Any]) -> None:
         log.append({"text": insertion, "timestamp": datetime.now(timezone.utc).isoformat()})
 
 
-def continue_streaming() -> None:
-    generator = st.session_state.get("streaming_generator")
-    if generator is None:
-        return
+def _find_bad_word(text: str, words: list[str]) -> int | None:
+    text_lower = text.lower()
+    for w in words:
+        pos = text_lower.find(w.lower())
+        if pos != -1:
+            return pos
+    return None
 
+
+def _keyword_retry_from_position(position: int) -> bool:
+    """Restart generation from *position*, truncating content before it.
+
+    For SSE mode: sets intervention state so that the next stream request
+    from React uses mode=intervention. Does NOT create a generator.
+    """
+    logger.info("_keyword_retry_from_position: position=%d (SSE mode)", position)
     messages: list[ChatMessage] = st.session_state["messages"]
-    if not messages or messages[-1].status != "streaming":
-        st.session_state["streaming_generator"] = None
-        st.session_state["streaming_intervention"] = None
-        st.session_state["_in_intervention_streaming"] = False
-        set_generating(st.session_state, False)
-        return
+    if not messages or messages[-1].role != "assistant":
+        return False
+    latest = messages[-1]
 
-    assistant = messages[-1]
-    intervention = st.session_state.get("streaming_intervention")
+    before_content = latest.content
+    prefix = before_content[:position]
+    # Keep full original content in latest.content during retry to prevent
+    # visible truncation. React will truncate to assistantPrefix when first token arrives.
+    latest.content = before_content
+    latest.status = "streaming"
+
+    frozen = frozen_messages_before_latest(messages)
+    st.session_state["streaming_intervention"] = {
+        "base_content": prefix,
+        "raw_continuation": "",
+        "clean_continuation": "",
+        "before_content": before_content,
+        "selection_start": position,
+        "insertion": "",
+        "action": "regenerate_from_here",
+        "frozen_messages": frozen,
+        "assistant_prefix": prefix,
+    }
+    st.session_state["last_intervention_request_id"] = repr(("kw_filter", id(latest), position))
+    # React will see status="streaming" + intervention state and auto-start
+    set_generating(st.session_state, True)
+    return True
+
+
+def _check_keywords_in_stream(content: str) -> bool:
+    """Per-token keyword check. Returns True if retry was triggered."""
+    kw = st.session_state["kw_filter"]
+    if not kw["enabled"]:
+        return False
+    bad_words = [w.strip() for w in kw["words"].split(",") if w.strip()]
+    if not bad_words:
+        return False
+
+    pos = _find_bad_word(content, bad_words)
+    if pos is None:
+        return False
+
+    logger.warning("_check_keywords_in_stream: bad word found at pos=%d, word match", pos)
+    kw["retry_count"] += 1
+    if kw["retry_count"] > kw["max_retries"]:
+        st.session_state["validator"]["error"] = (
+            f"禁止ワード検出、{kw['max_retries']}回リトライしても改善されませんでした"
+        )
+        kw["retry_count"] = 0
+        return False
+
+    return _keyword_retry_from_position(pos)
+
+
+def _run_llm_validator(content: str) -> None:
+    logger.info("_run_llm_validator: validating %d chars", len(content))
+    settings: LlmSettings = st.session_state["llm_settings"]
+    prompt_template = st.session_state["validator"]["prompt"]
+    if not prompt_template:
+        prompt = (
+            "以下の文章に不自然・不適切な表現がないか分析し、"
+            "問題箇所をJSON配列で出力してください。\n\n"
+            "書式:\n"
+            '```json\n'
+            '[{"position": 数値, "length": 数値, "reason": "説明",\n'
+            '  "suggestion": "regenerate_from_here"}]\n'
+            '```\n'
+            "問題がない場合は空配列 [] を出力。\n\n"
+            "---\n" + content
+        )
+    else:
+        prompt = prompt_template.replace("{text}", content)
 
     try:
-        chunk = next(generator)
-        if intervention:
-            raw = intervention["raw_continuation"] + chunk
-            intervention["raw_continuation"] = raw
-            base = intervention["base_content"]
-            clean = strip_continuation_overlap(base, raw)
-            intervention["clean_continuation"] = clean
-            assistant.content = base + clean
-        else:
-            assistant.content += chunk
-
-    except StopIteration:
-        if intervention:
-            _finalize_intervention(intervention)
-            st.session_state["streaming_intervention"] = None
-            st.session_state["_in_intervention_streaming"] = False
-
-        assistant.status = "complete"
-        st.session_state["streaming_generator"] = None
-        set_generating(st.session_state, False)
-
-    except LlmError as exc:
-        set_error(st.session_state, str(exc))
-        if intervention:
-            assistant.content = intervention["base_content"]
-        else:
-            assistant.content = "ローカルLLMへの接続または生成に失敗しました。サイドバーの設定を確認してください。"
-        assistant.status = "error"
-        st.session_state["streaming_generator"] = None
-        st.session_state["streaming_intervention"] = None
-        st.session_state["_in_intervention_streaming"] = False
-        set_generating(st.session_state, False)
-
+        raw = generate_text(prompt, settings)
+        st.session_state["validator"]["results"] = _parse_llm_issues(raw)
     except Exception as exc:
-        set_error(st.session_state, f"Unexpected generation error: {type(exc).__name__}: {exc}")
-        if intervention:
-            assistant.content = intervention["base_content"]
-        else:
-            assistant.content = "予期しないエラーで生成に失敗しました。エラー表示を確認してください。"
-        assistant.status = "error"
-        st.session_state["streaming_generator"] = None
-        st.session_state["streaming_intervention"] = None
-        st.session_state["_in_intervention_streaming"] = False
-        set_generating(st.session_state, False)
+        st.session_state["validator"]["error"] = f"LLM検証エラー: {exc}"
+
+
+def _parse_llm_issues(raw: str) -> list[dict[str, Any]]:
+    m = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw, re.DOTALL)
+    if m:
+        raw = m.group(1)
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return [d for d in data if isinstance(d, dict)]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return []
+
+
+def _run_validation_pipeline() -> bool:
+    """Run post-generation validation. Returns True if a retry was triggered.
+
+    During intervention streaming, only the newly generated continuation
+    (after base_content) is checked for bad words — the user-inserted text
+    is intentionally excluded from keyword filter retries.
+    """
+    logger.debug("_run_validation_pipeline: running post-generation validation")
+    messages: list[ChatMessage] = st.session_state["messages"]
+    if not messages:
+        return False
+    text = messages[-1].content
+
+    # During intervention, only check the newly generated part
+    intervention = st.session_state.get("streaming_intervention")
+    check_text = text
+    offset = 0
+    if intervention:
+        base = intervention.get("base_content", "")
+        if text.startswith(base):
+            check_text = text[len(base):]
+            offset = len(base)
+
+    # 1) Post-stream keyword filter (final check after streaming stops)
+    kw = st.session_state["kw_filter"]
+    bad_words = [w.strip() for w in kw["words"].split(",") if w.strip()]
+    if kw["enabled"] and bad_words:
+        pos = _find_bad_word(check_text, bad_words)
+        if pos is not None:
+            kw["retry_count"] += 1
+            if kw["retry_count"] <= kw["max_retries"]:
+                full_pos = offset + pos
+                _keyword_retry_from_position(full_pos)
+                return True
+            else:
+                st.session_state["validator"]["error"] = (
+                    f"禁止ワード検出、{kw['max_retries']}回リトライしても改善されませんでした"
+                )
+                kw["retry_count"] = 0
+
+    # 2) LLM validator (post-generation)
+    if st.session_state["validator"]["enabled"] and check_text:
+        _run_llm_validator(check_text)
+
+    return False
 
 
 def handle_user_prompt(prompt: str) -> None:
+    logger.info("handle_user_prompt: prompt=%d chars, '%s'", len(prompt), prompt[:80])
     messages: list[ChatMessage] = st.session_state["messages"]
     settings: LlmSettings = st.session_state["llm_settings"]
 
@@ -518,26 +758,78 @@ def handle_user_prompt(prompt: str) -> None:
 
     append_assistant_message(messages, "", status="streaming")
 
-    generator = iter_chat_response(messages[:-1], settings)
-    st.session_state["streaming_generator"] = generator
+    st.session_state["kw_filter"]["retry_count"] = 0
+    st.session_state["validator"]["error"] = None
+
+
+def handle_streaming_complete(event: dict[str, Any]) -> bool:
+    """Handle completion signal from React component after SSE streaming.
+    Returns True if a retry was triggered (caller should clear component value then st.rerun)."""
+    logger.info("handle_streaming_complete: content=%d chars, is_generating=%s, has_intervention=%s",
+                len(event.get("content", "")),
+                st.session_state.get("is_generating"),
+                st.session_state.get("streaming_intervention") is not None)
+    messages: list[ChatMessage] = st.session_state["messages"]
+    if not messages:
+        return False
+
+    latest = messages[-1]
+    if latest.role != "assistant":
+        return False
+
+    # Guard against stale events from persisted component values
+    if latest.status != "streaming":
+        logger.debug("handle_streaming_complete: skipping stale event (status=%s)", latest.status)
+        return False
+
+    content = event.get("content", "")
+
+    # Run validation BEFORE setting status, so retry can override it
+    latest.content = content
+    retried = _run_validation_pipeline()
+
+    if retried:
+        # Retry was triggered — _keyword_retry_from_position already set
+        # is_generating=True, status="streaming", and intervention state.
+        # Do NOT override is_generating to False here; React needs it True
+        # to auto-start the new intervention stream.
+        logger.info("handle_streaming_complete: retry triggered, is_generating=True, streaming_intervention set")
+        return True
+
+    # No retry — finalize normally
+    latest.content = content
+    latest.status = "complete"
+    set_generating(st.session_state, False)
+
+    intervention = st.session_state.get("streaming_intervention")
+    if intervention:
+        _finalize_intervention(intervention)
+        st.session_state["streaming_intervention"] = None
+        logger.info("handle_streaming_complete: finalized intervention, is_generating=False")
+
+    return False
 
 
 def _event_request_id(event: dict[str, Any]) -> str:
     request_id = event.get("requestId")
     if isinstance(request_id, str) and request_id:
         return request_id
-    return repr((event.get("action"), event.get("messageId"), event.get("selectionStart"), event.get("insertion") or ""))
+    return repr((
+        event.get("action"), event.get("messageId"),
+        event.get("selectionStart"), event.get("insertion") or "",
+    ))
 
 
 def handle_intervention_event(event: dict[str, Any]) -> bool:
     request_id = _event_request_id(event)
+    logger.info("handle_intervention_event: action=%s, requestId=%s, selectionStart=%s",
+                event.get("action"), request_id, event.get("selectionStart"))
     if st.session_state.get("last_intervention_request_id") == request_id:
         return False
 
     st.session_state["last_intervention_request_id"] = request_id
 
     messages: list[ChatMessage] = st.session_state["messages"]
-    settings: LlmSettings = st.session_state["llm_settings"]
 
     if not messages:
         return False
@@ -572,7 +864,6 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
         return True
 
     # 通常生成・介入生成のどちらでも、進行中のストリーミングを止める
-    st.session_state["streaming_generator"] = None
 
     set_error(st.session_state, None)
     set_generating(st.session_state, True)
@@ -583,6 +874,7 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
     latest.content = base_content
     latest.status = "streaming"
 
+    frozen = frozen_messages_before_latest(messages)
     st.session_state["streaming_intervention"] = {
         "base_content": base_content,
         "raw_continuation": "",
@@ -591,21 +883,21 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
         "selection_start": selection_start,
         "insertion": insertion,
         "action": action,
+        "frozen_messages": frozen,
+        "assistant_prefix": prefix,
     }
-    st.session_state["_in_intervention_streaming"] = True
 
-    generator = iter_intervention_continuation(
-        frozen_messages=frozen_messages_before_latest(messages),
-        assistant_prefix=prefix,
-        insertion=effective_insertion,
-        settings=settings,
-    )
-    st.session_state["streaming_generator"] = generator
+    st.session_state["kw_filter"]["retry_count"] = 0
+    st.session_state["validator"]["error"] = None
+
+    # Streaming will be handled by React component via SSE
+    # No need to create a generator here
 
     return True
 
 
 def undo_last_intervention() -> None:
+    logger.info("undo_last_intervention")
     messages: list[ChatMessage] = st.session_state["messages"]
     snapshot = pop_undo_snapshot(st.session_state)
 
@@ -624,181 +916,97 @@ def undo_last_intervention() -> None:
 
 def _thinking_badge() -> None:
     if st.session_state["is_generating"]:
-        st.markdown('<span class="bw-thinking">🤖 推論中...</span>', unsafe_allow_html=True)
+        st.markdown('<span class="bw-thinking">推論中</span>', unsafe_allow_html=True)
 
 
-def _init_code_panel_state() -> None:
-    for k in _CODE_PANEL_STATE_KEYS:
-        st.session_state.setdefault(k, None)
-
-
-def render_code_panel() -> None:
-    _init_code_panel_state()
-    settings: LlmSettings = st.session_state["llm_settings"]
+def render_validator_panel() -> None:
     is_generating = bool(st.session_state["is_generating"])
     messages: list[ChatMessage] = st.session_state["messages"]
-    last_content = messages[-1].content if messages else ""
 
-    with st.container():
-        st.markdown('<div class="code-panel">', unsafe_allow_html=True)
-        st.subheader("🧪 コード検証")
+    kw = st.session_state["kw_filter"]
+    val = st.session_state["validator"]
 
-        # 新着メッセージ通知
-        if messages and last_content:
-            last_id = messages[-1].id if messages[-1].role == "assistant" else None
-            prev_checked = st.session_state.get("_code_checked_msg_id")
-            if last_id and last_id != prev_checked and not is_generating:
-                st.success("📩 新しいメッセージが届きました — 検証コードを実行して分析できます")
-                if st.button("🔍 クイック分析", key="quick_analyze_btn"):
-                    code = TEMPLATES.get("LLMで文体チェック", "")
-                    if code:
-                        st.session_state["code_panel_code"] = code
-                        st.session_state["code_panel_template"] = "LLMで文体チェック"
-                    st.session_state["_code_checked_msg_id"] = last_id
-                    st.rerun()
+    if val["error"]:
+        st.sidebar.warning(val["error"])
 
-        with st.expander("📖 使い方"):
-            st.markdown(VALIDATOR_HELP)
-            st.markdown(VALIDATOR_EXTRA_DOCS)
+    # ── キーワードフィルター ──
+    st.sidebar.subheader("🚫 リアルタイムキーワードフィルター")
+    st.sidebar.caption("1トークンごとにチェック、引っかかったら即リトライ")
 
-        # テンプレート選択
-        template_names = list(TEMPLATES.keys())
-        prev_template = st.session_state.get("code_panel_template")
-        selected = st.selectbox(
-            "テンプレート",
-            options=["（選択してください）"] + template_names,
-            key="code_panel_template_selector",
-            disabled=is_generating,
-        )
-        if selected and selected != "（選択してください）" and selected != prev_template:
-            st.session_state["code_panel_code"] = TEMPLATES[selected]
-            st.session_state["code_panel_template"] = selected
+    kw["enabled"] = st.sidebar.checkbox(
+        "有効化",
+        value=kw["enabled"],
+        key="kw_enabled",
+        disabled=is_generating,
+    )
+
+    kw["words"] = st.sidebar.text_area(
+        "禁止ワード（カンマ区切り）",
+        value=kw["words"],
+        placeholder="ng, badword, ダメ",
+        key="kw_words",
+        disabled=not kw["enabled"] or is_generating,
+    )
+
+    rc = kw["retry_count"]
+    if rc > 0:
+        st.sidebar.caption(f"🔄 リトライ中 ({rc}/{kw['max_retries']})")
+
+    kw["max_retries"] = st.sidebar.number_input(
+        "最大リトライ回数",
+        min_value=1,
+        max_value=20,
+        value=kw["max_retries"],
+        step=1,
+        key="kw_max_retries",
+        disabled=not kw["enabled"] or is_generating,
+    )
+
+    st.sidebar.divider()
+
+    # ── LLM検証器 ──
+    st.sidebar.subheader("🤖 LLM検証器（事後）")
+    st.sidebar.caption("生成完了後にLLMが問題箇所を分析、JSONで位置を返す")
+
+    val["enabled"] = st.sidebar.checkbox(
+        "有効化",
+        value=val["enabled"],
+        key="llm_enabled",
+        disabled=is_generating,
+    )
+
+    val["prompt"] = st.sidebar.text_area(
+        "カスタムプロンプト（任意）",
+        value=val["prompt"],
+        placeholder="空欄でデフォルトプロンプトを使用。{text} で生成文を埋め込めます",
+        key="llm_prompt",
+        disabled=not val["enabled"] or is_generating,
+        height=100,
+    )
+
+    # 手動実行ボタン
+    if val["enabled"] and messages:
+        st.sidebar.caption("手動で実行する場合:")
+        if st.sidebar.button("🔍 LLM検証を実行", key="llm_run_btn", disabled=is_generating):
+            _run_llm_validator(messages[-1].content)
             st.rerun()
 
-        # コードエディタ
-        st.caption("検証コード")
-        code = st.text_area(
-            "コード",
-            value=st.session_state.get("code_panel_code") or "",
-            height=300,
-            key="code_panel_editor",
-            disabled=is_generating,
-            label_visibility="collapsed",
-        )
-
-        # アクションボタン
-        btn_col1, btn_col2 = st.columns(2)
-        with btn_col1:
-            if st.button("🤖 コードを生成", disabled=is_generating or not messages, key="code_gen_btn"):
-                with st.spinner("コードを生成中..."):
-                    _generate_code_with_llm()
+    # LLM検証結果
+    llm_results = val["results"]
+    if llm_results:
+        st.sidebar.divider()
+        st.sidebar.caption(f"📋 LLM検証: {len(llm_results)}件の問題")
+        for i, issue in enumerate(llm_results):
+            pos = issue.get("position", 0)
+            reason = issue.get("reason", "?")
+            length = issue.get("length", 0)
+            frag = messages[-1].content[pos:pos + length] if messages and pos >= 0 else ""
+            st.sidebar.error(f"#{i+1} pos={pos}: {reason}")
+            if frag:
+                st.sidebar.code(frag, line_limit=3)
+            if st.sidebar.button("↩️ この位置から再生成", key=f"llm-fix-{i}", disabled=is_generating):
+                _keyword_retry_from_position(pos)
                 st.rerun()
-        with btn_col2:
-            if st.button("▶️ 実行", disabled=not code or not messages, key="code_exec_btn"):
-                with st.spinner("コードを実行中..."):
-                    result = _execute_code(code)
-                    st.session_state["code_panel_result"] = result
-                    st.session_state["code_panel_error"] = None
-                st.rerun()
-
-        # 結果表示
-        result = st.session_state.get("code_panel_result")
-        if result:
-            analysis = result.get("analysis", "")
-            if analysis:
-                st.info(analysis)
-
-            suggestions = result.get("suggestions", [])
-            if suggestions:
-                st.success(f"💡 {len(suggestions)}件の提案があります")
-                for i, sug in enumerate(suggestions):
-                    action = sug.get("action", "?")
-                    pos = sug.get("position", 0)
-                    text = sug.get("text", "")
-                    st.caption(f"{i+1}. {action} @ pos={pos}" + (f' — "{text[:40]}..."' if text else ""))
-
-                if st.button("✅ 提案を適用", key="code_apply_btn"):
-                    _apply_code_suggestion(suggestions)
-                    st.session_state["code_panel_result"] = None
-                    st.rerun()
-            else:
-                st.caption("提案はありません")
-        elif st.session_state.get("code_panel_error"):
-            st.error(st.session_state["code_panel_error"])
-
-        st.markdown('</div>', unsafe_allow_html=True)
-
-
-def _generate_code_with_llm() -> None:
-    messages: list[ChatMessage] = st.session_state["messages"]
-    settings: LlmSettings = st.session_state["llm_settings"]
-    if not messages:
-        return
-
-    last_user = ""
-    for m in reversed(messages):
-        if m.role == "user":
-            last_user = m.content
-            break
-    last_assistant = messages[-1].content if messages[-1].role == "assistant" else ""
-
-    if not last_assistant:
-        return
-
-    prompt = code_generation_prompt(last_user, last_assistant)
-    try:
-        code = generate_text(prompt, settings)
-        st.session_state["code_panel_code"] = code
-        st.session_state["code_panel_template"] = None
-    except LlmError as exc:
-        st.session_state["code_panel_error"] = str(exc)
-
-
-def _execute_code(code: str) -> dict[str, Any]:
-    messages: list[ChatMessage] = st.session_state["messages"]
-    settings: LlmSettings = st.session_state["llm_settings"]
-    last_content = messages[-1].content if messages else ""
-
-    env = {
-        "messages": messages,
-        "last_content": last_content,
-        "settings": settings,
-        "generate_text": generate_text,
-    }
-    return execute_validator_code(code, env)
-
-
-def _apply_code_suggestion(suggestions: list[dict[str, Any]]) -> None:
-    messages: list[ChatMessage] = st.session_state["messages"]
-    if not messages or not suggestions:
-        return
-    latest = messages[-1]
-    if latest.role != "assistant":
-        return
-
-    sug = suggestions[0]
-    action = sug.get("action", "insert_and_continue")
-    pos = sug.get("position", len(latest.content))
-    insertion = sug.get("text", "")
-    if action == "regenerate_from_here":
-        event = {
-            "requestId": str(uuid4()),
-            "action": "regenerate_from_here",
-            "messageId": latest.id,
-            "selectionStart": pos,
-            "selectionEnd": pos,
-        }
-    else:
-        event = {
-            "requestId": str(uuid4()),
-            "action": "insert_and_continue",
-            "messageId": latest.id,
-            "selectionStart": pos,
-            "selectionEnd": pos,
-            "insertion": insertion,
-        }
-    handle_intervention_event(event)
-
 
 def _first_launch_wizard() -> None:
     """初回起動時に自動プローブとモデル選択を案内する."""
@@ -816,8 +1024,11 @@ def _first_launch_wizard() -> None:
         else:
             st.error(
                 "❌ Ollama / LM Studio が見つかりません。\n\n"
-                "- **Ollama**: https://ollama.com/download からインストール後、`ollama pull llama3.2:1b` を実行\n"
-                "- **LM Studio**: https://lmstudio.ai からインストール後、モデルを読み込んでLocal Inference Serverを起動\n\n"
+                "- **Ollama**: https://ollama.com/download"
+                " からインストール後、`ollama pull llama3.2:1b` を実行\n"
+                "- **LM Studio**: https://lmstudio.ai"
+                " からインストール後、モデルを読み込んで"
+                "Local Inference Serverを起動\n\n"
                 "設定後、画面左のサイドバーで接続設定を行ってください。"
             )
             return
@@ -830,6 +1041,7 @@ def _first_launch_wizard() -> None:
         settings.context_window = ctx
         settings.max_tokens = out
         st.success(f"✅ モデル `{settings.model}` を選択しました。")
+        st.rerun()
     else:
         st.warning(
             "⚠️  エンドポイントは検出できましたが、利用可能なモデルが見つかりません。\n\n"
@@ -839,19 +1051,25 @@ def _first_launch_wizard() -> None:
     st.button("OK, はじめる", key="wizard_dismiss")
 
 
+def _start_streaming_server() -> None:
+    """Start the SSE streaming server if not already running."""
+    if not st.session_state.get("_streaming_server_started"):
+        logger.info("_start_streaming_server: starting SSE server on port %d", _STREAMING_PORT)
+        st.session_state["_streaming_server_started"] = True
+        start_server(port=_STREAMING_PORT)
+
+
 def main() -> None:
+    logger.info("main: Branch Writer starting")
     st.set_page_config(page_title="Branch Writer", page_icon="✍️", layout="wide")
     initialize_state(st.session_state)
     _inject_custom_css()
+    _start_streaming_server()
 
     st.title("Branch Writer")
     _thinking_badge()
 
     _first_launch_wizard()
-
-    if st.session_state["is_generating"] and st.session_state.get("streaming_generator"):
-        continue_streaming()
-        st.rerun()
 
     render_sidebar()
 
@@ -859,21 +1077,23 @@ def main() -> None:
     if last_error:
         st.error(last_error)
 
-    col_chat, col_code = st.columns([0.65, 0.35], gap="large")
-    with col_chat:
-        render_messages()
+    render_messages()
+
+    intervention_event = st.session_state.pop("_intervention_event", None)
+    if intervention_event:
+        handle_intervention_event(intervention_event)
+        st.rerun()
+
+    if not component_available():
         event = render_intervention_panel()
         if event:
             handle_intervention_event(event)
             st.rerun()
 
-        prompt = st.chat_input("メッセージを入力", disabled=bool(st.session_state["is_generating"]))
-        if prompt:
-            handle_user_prompt(prompt)
-            st.rerun()
-
-    with col_code:
-        render_code_panel()
+    prompt = st.chat_input("メッセージを入力", disabled=bool(st.session_state["is_generating"]))
+    if prompt:
+        handle_user_prompt(prompt)
+        st.rerun()
 
 
 if __name__ == "__main__":

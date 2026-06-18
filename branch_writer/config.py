@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from urllib.parse import urlparse
+
+logger = logging.getLogger("branch_writer.config")
 
 DEFAULT_BASE_URL = ""
 DEFAULT_API_KEY = ""

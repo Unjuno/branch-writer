@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
+
+logger = logging.getLogger("branch_writer.messages")
 
 MessageRole = Literal["user", "assistant"]
 MessageStatus = Literal["streaming", "complete", "error"]
@@ -30,6 +33,7 @@ def append_user_message(messages: list[ChatMessage], content: str) -> ChatMessag
     """Append a user message and return it."""
     message = ChatMessage(role="user", content=content, status="complete")
     messages.append(message)
+    logger.debug("append_user_message: id=%s, %d chars", message.id, len(content))
     return message
 
 
@@ -41,6 +45,7 @@ def append_assistant_message(
     """Append an assistant message and return it."""
     message = ChatMessage(role="assistant", content=content, status=status)
     messages.append(message)
+    logger.debug("append_assistant_message: id=%s, status=%s", message.id, status)
     return message
 
 
