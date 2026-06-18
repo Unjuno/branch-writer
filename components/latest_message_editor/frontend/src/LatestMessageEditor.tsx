@@ -7,6 +7,13 @@ type StreamingDoneEvent = {
   messageId: string
 }
 
+type StreamingErrorEvent = {
+  type: "streaming_error"
+  message: string
+  content: string
+  messageId: string
+}
+
 type LatestMessageEditorArgs = {
   messageId?: string
   content?: string
@@ -56,6 +63,22 @@ function themeVars(theme?: StreamlitTheme): CSSProperties {
   } as CSSProperties
 }
 
+function stableStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, Object.keys(value as Record<string, unknown>).sort())
+  } catch {
+    return String(value)
+  }
+}
+
+function interventionBase(extraParams: Record<string, unknown>): string {
+  const baseContent = extraParams.baseContent
+  if (typeof baseContent === "string") return baseContent
+  const prefix = typeof extraParams.assistantPrefix === "string" ? extraParams.assistantPrefix : ""
+  const insertion = typeof extraParams.insertion === "string" ? extraParams.insertion : ""
+  return prefix + insertion
+}
+
 function LatestMessageEditor(props: ComponentProps) {
   const args = props.args as LatestMessageEditorArgs
   const theme = (props as ComponentProps & { theme?: StreamlitTheme }).theme
@@ -76,9 +99,13 @@ function LatestMessageEditor(props: ComponentProps) {
   const abortControllerRef = useRef<AbortController | null>(null)
   const accumulatedRef = useRef("")
   const doneSentRef = useRef(false)
-  const completedRef = useRef(false)
+  const completedStreamKeyRef = useRef<string | null>(null)
 
   const isActivelyStreaming = isStreaming && streamId !== null
+  const streamKey = useMemo(() => {
+    const mode = interventionData ? "intervention" : "normal"
+    return `${messageId}:${mode}:${stableStringify(interventionData)}:${messagesForStream.length}:${initialContent.length}`
+  }, [messageId, interventionData, messagesForStream.length, initialContent.length])
 
   const textWithCursor = useMemo(() => {
     if (isActivelyStreaming) {
@@ -101,6 +128,17 @@ function LatestMessageEditor(props: ComponentProps) {
     return `${messageId}:stream:${Date.now()}:${Math.random().toString(36).slice(2)}`
   }, [messageId])
 
+  const emitError = useCallback((message: string) => {
+    const errorContent = accumulatedRef.current || displayContent || initialContent
+    const event: StreamingErrorEvent = {
+      type: "streaming_error",
+      message,
+      content: errorContent,
+      messageId,
+    }
+    Streamlit.setComponentValue(event)
+  }, [displayContent, initialContent, messageId])
+
   const startStreaming = useCallback(async (mode: string, extraParams: Record<string, unknown> = {}) => {
     if (!streamingUrl || !llmSettings) return
 
@@ -108,10 +146,11 @@ function LatestMessageEditor(props: ComponentProps) {
     console.log("[BranchWriter] startStreaming:", { mode, streamId: newStreamId })
     doneSentRef.current = false
     setStreamId(newStreamId)
-    // For intervention mode, start from the assistant prefix so tokens append correctly
-    accumulatedRef.current = mode === "intervention" && extraParams.assistantPrefix
-      ? (extraParams.assistantPrefix as string)
-      : ""
+
+    accumulatedRef.current = mode === "intervention" ? interventionBase(extraParams) : ""
+    if (accumulatedRef.current) {
+      setDisplayContent(accumulatedRef.current)
+    }
 
     abortControllerRef.current?.abort()
     const controller = new AbortController()
@@ -159,8 +198,11 @@ function LatestMessageEditor(props: ComponentProps) {
             try {
               const parsed = JSON.parse(data)
               if (eventType === "token") {
-                accumulatedRef.current += parsed.text
-                setDisplayContent(accumulatedRef.current)
+                const nextContent = typeof parsed.fullContent === "string"
+                  ? parsed.fullContent
+                  : accumulatedRef.current + (parsed.text ?? "")
+                accumulatedRef.current = nextContent
+                setDisplayContent(nextContent)
               } else if (eventType === "done") {
                 const finalContent = parsed.fullContent ?? accumulatedRef.current
                 accumulatedRef.current = finalContent
@@ -180,7 +222,10 @@ function LatestMessageEditor(props: ComponentProps) {
                 }
                 return
               } else if (eventType === "error") {
-                console.error("Stream error:", parsed.message)
+                const msg = parsed.message ?? "Streaming error"
+                console.error("Stream error:", msg)
+                setDisplayContent(`生成エラー: ${msg}`)
+                emitError(String(msg))
                 if (abortControllerRef.current === controller) {
                   setStreamId(null)
                 }
@@ -191,7 +236,7 @@ function LatestMessageEditor(props: ComponentProps) {
                 }
                 return
               }
-            } catch { /* ignore */ }
+            } catch { /* ignore malformed SSE line */ }
           }
         }
       }
@@ -200,7 +245,10 @@ function LatestMessageEditor(props: ComponentProps) {
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
+        const msg = (err as Error).message || String(err)
         console.error("Streaming error:", err)
+        setDisplayContent(`生成エラー: ${msg}`)
+        emitError(msg)
       }
       if (abortControllerRef.current === controller) {
         setStreamId(null)
@@ -208,39 +256,33 @@ function LatestMessageEditor(props: ComponentProps) {
     } finally {
       reader?.releaseLock()
     }
-  }, [streamingUrl, generateStreamId, messageId, messagesForStream, llmSettings])
-
-  const prevInterventionRef = useRef(interventionData)
+  }, [streamingUrl, generateStreamId, messageId, messagesForStream, llmSettings, displayContent, initialContent, emitError])
 
   useEffect(() => {
-    // When interventionData changes, abort old stream and reset so new stream starts immediately
-    if (prevInterventionRef.current !== interventionData) {
-      completedRef.current = false
-      prevInterventionRef.current = interventionData
-      abortControllerRef.current?.abort()
-      setStreamId(null)
+    if (!isStreaming) {
+      completedStreamKeyRef.current = null
+      return
+    }
+    if (!streamingUrl || streamId || completedStreamKeyRef.current === streamKey) {
+      return
     }
 
-    if (isStreaming && !completedRef.current && streamingUrl && !streamId) {
-      completedRef.current = true
-      const hasIntervention = interventionData && Object.keys(interventionData).length > 0
-      if (hasIntervention) {
-        startStreaming("intervention", {
-          assistantPrefix: interventionData.assistantPrefix,
-          insertion: interventionData.insertion,
-          action: interventionData.action,
-          beforeContent: interventionData.beforeContent,
-          selectionStart: interventionData.selectionStart,
-          frozenMessages: interventionData.frozenMessages,
-        })
-      } else {
-        startStreaming("normal")
-      }
+    completedStreamKeyRef.current = streamKey
+    const hasIntervention = interventionData && Object.keys(interventionData).length > 0
+    if (hasIntervention) {
+      startStreaming("intervention", {
+        baseContent: interventionData.baseContent,
+        assistantPrefix: interventionData.assistantPrefix,
+        insertion: interventionData.insertion,
+        action: interventionData.action,
+        beforeContent: interventionData.beforeContent,
+        selectionStart: interventionData.selectionStart,
+        frozenMessages: interventionData.frozenMessages,
+      })
+    } else {
+      startStreaming("normal")
     }
-    if (!isStreaming) {
-      completedRef.current = false
-    }
-  }, [isStreaming, streamingUrl, streamId, startStreaming, interventionData])
+  }, [isStreaming, streamingUrl, streamId, streamKey, startStreaming, interventionData])
 
   useEffect(() => {
     return () => { abortControllerRef.current?.abort() }
@@ -252,13 +294,13 @@ function LatestMessageEditor(props: ComponentProps) {
     const lines = displayContent.split("\n")
     let charPos = 0
     for (let i = 0; i < lineIndex && i < lines.length; i++) {
-      charPos += lines[i].length + 1
+      charPos += Array.from(lines[i]).length + 1
     }
-    charPos = Math.min(charPos, displayContent.length)
+    charPos = Math.min(charPos, Array.from(displayContent).length)
 
     setSelectionStart(charPos)
     setHoveredLine(lineIndex)
-  }, [disabled, isActivelyStreaming, displayContent])
+  }, [disabled, displayContent])
 
   const confirmSelection = useCallback(() => {
     if (hoveredLine === null) return
@@ -267,7 +309,6 @@ function LatestMessageEditor(props: ComponentProps) {
   }, [hoveredLine, selectionStart, messageId])
 
   const canPositionCursor = !disabled
-
   const lines = useMemo(() => textWithCursor.split("\n"), [textWithCursor])
 
   return (
