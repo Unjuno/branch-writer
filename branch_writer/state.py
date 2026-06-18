@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from typing import Any, MutableMapping
 from uuid import uuid4
@@ -26,10 +26,34 @@ class UndoSnapshot:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+def _migrate_llm_settings(state: MutableMapping[str, Any]) -> None:
+    """Coerce older session-state LLM settings into the current dataclass shape."""
+    current = state.get("llm_settings")
+    defaults = default_llm_settings()
+
+    if current is None:
+        state["llm_settings"] = defaults
+        return
+
+    values: dict[str, Any] = {}
+    changed = not isinstance(current, LlmSettings)
+
+    for item in fields(LlmSettings):
+        if hasattr(current, item.name):
+            values[item.name] = getattr(current, item.name)
+        else:
+            values[item.name] = getattr(defaults, item.name)
+            changed = True
+
+    if changed:
+        logger.info("_migrate_llm_settings: migrated session llm_settings to current schema")
+        state["llm_settings"] = LlmSettings(**values)
+
+
 def initialize_state(state: MutableMapping[str, Any]) -> None:
     """Initialize a Streamlit-compatible session state mapping."""
     state.setdefault("messages", [])
-    state.setdefault("llm_settings", default_llm_settings())
+    _migrate_llm_settings(state)
     state.setdefault("undo_stack", [])
     state.setdefault("is_generating", False)
     state.setdefault("last_error", None)
@@ -40,21 +64,27 @@ def initialize_state(state: MutableMapping[str, Any]) -> None:
     state.setdefault("reuse_insertion", None)
     state.setdefault("streaming_intervention", None)
 
-    # キーワードフィルター (リアルタイム、1トークンごと)
     state.setdefault("kw_filter", {
         "enabled": True,
         "words": "",
         "max_retries": 5,
         "retry_count": 0,
     })
+    state["kw_filter"].setdefault("enabled", True)
+    state["kw_filter"].setdefault("words", "")
+    state["kw_filter"].setdefault("max_retries", 5)
+    state["kw_filter"].setdefault("retry_count", 0)
 
-    # LLM検証器 (事後)
     state.setdefault("validator", {
         "enabled": False,
         "prompt": "",
         "results": None,
         "error": None,
     })
+    state["validator"].setdefault("enabled", False)
+    state["validator"].setdefault("prompt", "")
+    state["validator"].setdefault("results", None)
+    state["validator"].setdefault("error", None)
 
 
 def get_messages(state: MutableMapping[str, Any]) -> list[ChatMessage]:
