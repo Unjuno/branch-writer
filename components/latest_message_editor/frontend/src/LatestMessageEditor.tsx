@@ -64,11 +64,10 @@ function themeVars(theme?: StreamlitTheme): CSSProperties {
 }
 
 function stableStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value, Object.keys(value as Record<string, unknown>).sort())
-  } catch {
-    return String(value)
-  }
+  if (value === null || typeof value !== "object") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`
+  const obj = value as Record<string, unknown>
+  return `{${Object.keys(obj).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`).join(",")}}`
 }
 
 function interventionBase(extraParams: Record<string, unknown>): string {
@@ -104,8 +103,8 @@ function LatestMessageEditor(props: ComponentProps) {
   const isActivelyStreaming = isStreaming && streamId !== null
   const streamKey = useMemo(() => {
     const mode = interventionData ? "intervention" : "normal"
-    return `${messageId}:${mode}:${stableStringify(interventionData)}:${messagesForStream.length}:${initialContent.length}`
-  }, [messageId, interventionData, messagesForStream.length, initialContent.length])
+    return `${messageId}:${mode}:${stableStringify(interventionData)}:${stableStringify(messagesForStream)}:${stableStringify(llmSettings)}`
+  }, [messageId, interventionData, messagesForStream, llmSettings])
 
   const textWithCursor = useMemo(() => {
     if (isActivelyStreaming) {
@@ -128,8 +127,20 @@ function LatestMessageEditor(props: ComponentProps) {
     return `${messageId}:stream:${Date.now()}:${Math.random().toString(36).slice(2)}`
   }, [messageId])
 
+  const emitDone = useCallback((content: string) => {
+    if (doneSentRef.current) return
+    doneSentRef.current = true
+    const doneEvent: StreamingDoneEvent = {
+      type: "streaming_done",
+      content,
+      messageId,
+    }
+    Streamlit.setComponentValue(doneEvent)
+  }, [messageId])
+
   const emitError = useCallback((message: string) => {
-    const errorContent = accumulatedRef.current || displayContent || initialContent
+    const fallbackContent = accumulatedRef.current || displayContent || initialContent
+    const errorContent = fallbackContent || `生成エラー: ${message}`
     const event: StreamingErrorEvent = {
       type: "streaming_error",
       message,
@@ -137,7 +148,10 @@ function LatestMessageEditor(props: ComponentProps) {
       messageId,
     }
     Streamlit.setComponentValue(event)
-  }, [displayContent, initialContent, messageId])
+    // Current Python app versions may ignore streaming_error. Also emit done so
+    // the app leaves is_generating=True instead of getting stuck.
+    emitDone(errorContent)
+  }, [displayContent, emitDone, initialContent, messageId])
 
   const startStreaming = useCallback(async (mode: string, extraParams: Record<string, unknown> = {}) => {
     if (!streamingUrl || !llmSettings) return
@@ -208,15 +222,7 @@ function LatestMessageEditor(props: ComponentProps) {
                 accumulatedRef.current = finalContent
                 setDisplayContent(finalContent)
                 console.log("[BranchWriter] streaming done:", { contentLen: finalContent.length })
-                if (!doneSentRef.current && finalContent.length > 0) {
-                  doneSentRef.current = true
-                  const doneEvent: StreamingDoneEvent = {
-                    type: "streaming_done",
-                    content: finalContent,
-                    messageId,
-                  }
-                  Streamlit.setComponentValue(doneEvent)
-                }
+                if (finalContent.length > 0) emitDone(finalContent)
                 if (abortControllerRef.current === controller) {
                   setStreamId(null)
                 }
@@ -256,7 +262,7 @@ function LatestMessageEditor(props: ComponentProps) {
     } finally {
       reader?.releaseLock()
     }
-  }, [streamingUrl, generateStreamId, messageId, messagesForStream, llmSettings, displayContent, initialContent, emitError])
+  }, [streamingUrl, generateStreamId, messagesForStream, llmSettings, emitDone, emitError])
 
   useEffect(() => {
     if (!isStreaming) {
