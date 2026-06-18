@@ -75,6 +75,7 @@ class LlmSettings:
     max_tokens: int = DEFAULT_MAX_TOKENS
     context_window: int = DEFAULT_CONTEXT_WINDOW
     request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS
+    system_prompt: str = ""
 
 
 def default_llm_settings() -> LlmSettings:

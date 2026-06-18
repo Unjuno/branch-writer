@@ -14,7 +14,7 @@ echo "========================================"
 echo " Branch Writer セットアップ"
 echo "========================================"
 
-# ---- Python 確認 ----
+# ---- Python の確認 ----
 if ! command -v python3 &>/dev/null && ! command -v python &>/dev/null; then
   echo "❌ Python が見つかりません。https://www.python.org/downloads/ からインストールしてください。"
   exit 1
@@ -22,7 +22,7 @@ fi
 PYTHON=$(command -v python3 || command -v python)
 echo "✓ Python: $($PYTHON --version)"
 
-# ---- Git clone / pull ----
+# ---- Git の clone / pull ----
 if [ -d "$APP_DIR" ]; then
   echo "✓ 既存のリポジトリを更新します..."
   cd "$APP_DIR" && git pull
@@ -32,7 +32,7 @@ else
   cd "$APP_DIR"
 fi
 
-# ---- Python 仮想環境 & 依存関係 ----
+# ---- Python 仮想環境と依存関係 ----
 if [ ! -d ".venv" ]; then
   echo "✓ 仮想環境を作成します..."
   $PYTHON -m venv .venv
@@ -41,20 +41,20 @@ source .venv/bin/activate
 echo "✓ 依存関係をインストールします..."
 pip install -q -r requirements.txt
 
-# ---- Ollama 確認 ----
+# ---- Ollama の確認 / 自動インストール ----
 if ! command -v ollama &>/dev/null; then
-  echo ""
-  echo "⚠️  Ollama がインストールされていません。"
-  echo "   以下のコマンドでインストールしてください:"
-  echo ""
+  echo "⚠️  Ollama がインストールされていません。自動インストールします..."
   echo "   curl -fsSL https://ollama.com/install.sh | sh"
-  echo ""
-  echo "   インストール後、もう一度このスクリプトを実行してください。"
-  exit 1
+  curl -fsSL https://ollama.com/install.sh | sh
+  if ! command -v ollama &>/dev/null; then
+    echo "❌ Ollama のインストールに失敗しました。手動でインストールしてください:"
+    echo "   curl -fsSL https://ollama.com/install.sh | sh"
+    exit 1
+  fi
 fi
 echo "✓ Ollama: $(ollama --version)"
 
-# ---- モデルダウンロード ----
+# ---- モデルのダウンロード ----
 echo "✓ モデル ($MODEL) をダウンロードします（初回のみ）..."
 ollama pull "$MODEL"
 

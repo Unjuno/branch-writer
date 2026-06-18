@@ -9,7 +9,7 @@ Write-Host "========================================"
 Write-Host " Branch Writer セットアップ"
 Write-Host "========================================"
 
-# ---- Python 確認 ----
+# ---- Python の確認 ----
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {
     Write-Host "❌ Python が見つかりません。https://www.python.org/downloads/ からインストールしてください。"
@@ -17,7 +17,7 @@ if (-not $python) {
 }
 Write-Host "✓ Python: $(& python --version)"
 
-# ---- Git clone / pull ----
+# ---- Git の clone / pull ----
 if (Test-Path $AppDir) {
     Write-Host "✓ 既存のリポジトリを更新します..."
     Set-Location $AppDir
@@ -29,7 +29,7 @@ else {
     Set-Location $AppDir
 }
 
-# ---- Python 仮想環境 & 依存関係 ----
+# ---- Python 仮想環境と依存関係 ----
 if (-not (Test-Path ".venv")) {
     Write-Host "✓ 仮想環境を作成します..."
     python -m venv .venv
@@ -38,18 +38,29 @@ if (-not (Test-Path ".venv")) {
 Write-Host "✓ 依存関係をインストールします..."
 pip install -q -r requirements.txt
 
-# ---- Ollama 確認 ----
+# ---- Ollama の確認 / 自動インストール ----
 $ollama = Get-Command ollama -ErrorAction SilentlyContinue
 if (-not $ollama) {
-    Write-Host ""
-    Write-Host "⚠️  Ollama がインストールされていません。"
-    Write-Host "    https://ollama.com/download/windows からダウンロードしてインストールしてください。"
-    Write-Host "    インストール後、もう一度このスクリプトを実行してください。"
-    exit 1
+    Write-Host "⚠️  Ollama がインストールされていません。自動インストールを試みます..."
+    Write-Host "   Winget で Ollama をインストール中..."
+    try {
+        winget install --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements 2>$null
+    } catch {
+        Write-Host "⚠️  Winget でのインストールに失敗しました。手動でインストールしてください:"
+        Write-Host "    https://ollama.com/download/windows"
+        exit 1
+    }
+    # winget インストール後、path が通るまでリフレッシュ
+    $ollama = Get-Command ollama -ErrorAction SilentlyContinue
+    if (-not $ollama) {
+        Write-Host "⚠️  Ollama が見つかりません。手動でインストールしてください:"
+        Write-Host "    https://ollama.com/download/windows"
+        exit 1
+    }
 }
 Write-Host "✓ Ollama: $(& ollama --version)"
 
-# ---- モデルダウンロード ----
+# ---- モデルのダウンロード ----
 Write-Host "✓ モデル ($Model) をダウンロードします（初回のみ）..."
 ollama pull $Model
 

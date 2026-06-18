@@ -1,46 +1,84 @@
-"""MCP client wrapper for the model-discovery server.
-
-Spawns the server as a subprocess and communicates via the stdio MCP transport.
-"""
+"""Direct HTTP model discovery (no MCP)."""
 
 from __future__ import annotations
 
-import asyncio
-import json
-import sys
 from typing import Any
 
-from mcp import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
+import httpx
 
 
 def discover_models_sync(base_url: str) -> list[dict[str, Any]]:
-    """Call the model-discovery MCP server and return available models.
+    """Discover available models from Ollama (preferred) or OpenAI-compatible endpoint.
 
     Returns a list of dicts with keys: id, name, provider[, size].
     """
-    return asyncio.run(_call_discover_models(base_url))
+    stripped = base_url.strip()
+    if not stripped:
+        return []
+
+    models = _try_ollama(stripped)
+    if models:
+        return models
+
+    return _try_openai(stripped)
 
 
-async def _call_discover_models(base_url: str) -> list[dict[str, Any]]:
-    server_params = StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "branch_writer.model_discovery.server"],
-    )
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool(
-                name="discover_models",
-                arguments={"base_url": base_url},
-            )
+def _try_ollama(base_url: str) -> list[dict[str, Any]]:
+    """Fetch models from Ollama's /api/tags endpoint."""
+    url = _ollama_tags_url(base_url)
+    try:
+        resp = httpx.get(url, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return []
 
-            if result.isError:
-                return []
+    models: list[dict[str, Any]] = []
+    for model in data.get("models", []):
+        name: str = model.get("name", "")
+        if name:
+            models.append({
+                "id": name,
+                "name": name,
+                "provider": "ollama",
+                "size": model.get("size"),
+            })
+    return models
 
-            text = "".join(
-                c.text for c in (result.content or []) if hasattr(c, "text")
-            )
-            if text:
-                return json.loads(text)
-            return []
+
+def _try_openai(base_url: str) -> list[dict[str, Any]]:
+    """Fetch models from OpenAI-compatible /v1/models endpoint (LM Studio etc.)."""
+    url = _openai_models_url(base_url)
+    try:
+        resp = httpx.get(url, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return []
+
+    models: list[dict[str, Any]] = []
+    for model in data.get("data", []):
+        model_id: str = model.get("id", "")
+        if model_id:
+            owned_by = str(model.get("owned_by", "")).lower()
+            provider = "lm_studio" if "lm-studio" in owned_by else "openai_compat"
+            models.append({
+                "id": model_id,
+                "name": model_id,
+                "provider": provider,
+            })
+    return models
+
+
+def _ollama_tags_url(base_url: str) -> str:
+    normalized = base_url.strip().rstrip("/")
+    if normalized.endswith("/v1"):
+        normalized = normalized[:-3]
+    return normalized + "/api/tags"
+
+
+def _openai_models_url(base_url: str) -> str:
+    normalized = base_url.strip().rstrip("/")
+    if normalized.endswith("/v1"):
+        return normalized + "/models"
+    return normalized + "/models"

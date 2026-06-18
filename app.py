@@ -1,4 +1,4 @@
-"""Branch Writer Streamlit app."""
+"""Branch Writer の Streamlit アプリ。"""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from branch_writer.intervention import (
 )
 from branch_writer.llm import (
     LlmError,
+    generate_text,
     iter_chat_response,
     iter_intervention_continuation,
 )
@@ -27,6 +28,13 @@ from branch_writer.messages import (
     append_user_message,
     frozen_messages_before_latest,
     is_intervenable,
+)
+from branch_writer.code_validator import (
+    TEMPLATES,
+    VALIDATOR_HELP,
+    VALIDATOR_EXTRA_DOCS,
+    execute_validator_code,
+    code_generation_prompt,
 )
 from branch_writer.state import (
     initialize_state,
@@ -41,7 +49,6 @@ DEFAULT_RENDER_MESSAGE_LIMIT = 80
 MIN_RENDER_MESSAGE_LIMIT = 10
 MAX_RENDER_MESSAGE_LIMIT = 500
 
-_CURSOR_CSS_INJECTED = False
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
 _DEFAULT_ENDPOINTS = [
@@ -49,12 +56,19 @@ _DEFAULT_ENDPOINTS = [
     "http://localhost:1234/v1",    # LM Studio
 ]
 
+_CODE_PANEL_STATE_KEYS = [
+    "code_panel_code",
+    "code_panel_template",
+    "code_panel_result",
+    "code_panel_error",
+    "_code_checked_msg_id",
+]
 
-def _inject_cursor_css() -> None:
-    global _CURSOR_CSS_INJECTED
-    if _CURSOR_CSS_INJECTED:
+
+def _inject_custom_css() -> None:
+    if st.session_state.get("_custom_css_injected"):
         return
-    _CURSOR_CSS_INJECTED = True
+    st.session_state["_custom_css_injected"] = True
     st.markdown(
         """<style>
 .bw-cursor {
@@ -64,6 +78,33 @@ def _inject_cursor_css() -> None:
 }
 @keyframes bw-blink {
     50% { opacity: 0; }
+}
+
+.bw-thinking {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    border-radius: 12px;
+    background: #ff4b4b;
+    color: white;
+    font-size: 0.85rem;
+    font-weight: 600;
+    animation: bw-pulse 1.5s ease-in-out infinite;
+}
+@keyframes bw-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.code-panel {
+    border-left: 1px solid rgba(128,128,128,0.2);
+    padding-left: 1rem;
+}
+.code-panel .stTextArea textarea {
+    font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+    font-size: 0.8rem;
+    line-height: 1.4;
 }
 </style>""",
         unsafe_allow_html=True,
@@ -161,6 +202,14 @@ def render_sidebar() -> None:
     )
     settings.api_key = st.sidebar.text_input("API キー", value=settings.api_key, type="password", disabled=is_generating)
 
+    settings.system_prompt = st.sidebar.text_area(
+        "システムプロンプト",
+        value=settings.system_prompt,
+        placeholder="創作のテーマや作風を指定（例: 三人称、現代日本を舞台にした探偵小説）",
+        disabled=is_generating,
+        key="system_prompt_input",
+    )
+
     if st.sidebar.button("🔄 モデル一覧を再取得", disabled=is_generating, key="discover_models_btn"):
         with st.spinner("モデル一覧を取得中..."):
             resolved = _probe_base_url(settings.base_url)
@@ -196,7 +245,7 @@ def render_sidebar() -> None:
             settings.max_tokens = out
     settings.temperature = st.sidebar.slider("温度 (Temperature)", min_value=0.0, max_value=2.0, value=float(settings.temperature), step=0.1, disabled=is_generating)
 
-    # context_window だけ表示、max_tokens は自動計算
+    # context_window のみ表示し、max_tokens は自動計算する
     settings.context_window = st.sidebar.number_input(
         "コンテキストウィンドウ",
         min_value=512,
@@ -269,7 +318,7 @@ def reset_chat_state() -> None:
     st.session_state["streaming_intervention"] = None
     st.session_state["_in_intervention_streaming"] = False
     st.session_state["available_models"] = []
-    st.session_state["_discovered_at_url"] = None
+    st.session_state["_code_checked_msg_id"] = None
 
 
 def render_frozen_message(message: ChatMessage) -> None:
@@ -291,48 +340,48 @@ def render_intervention_panel() -> dict[str, Any] | None:
         return None
 
     st.divider()
+    st.caption("✂️ 介入 — スライダーで位置を選んで書き換え")
 
-    _, _, right = st.columns([4, 2, 2])
-    with right:
-        st.caption("介入")
+    max_index = len(latest.content)
+    selection_start = st.slider(
+        "介入位置",
+        min_value=0,
+        max_value=max_index,
+        value=max_index,
+        key=f"intervention-slider-{latest.id}",
+    )
 
-    cols = st.columns([4, 2, 2])
-    with cols[2]:
-        max_index = len(latest.content)
-        selection_start = st.number_input(
-            "開始位置",
-            min_value=0,
-            max_value=max_index,
-            value=max_index,
-            step=1,
-            key=f"intervention-selection-{latest.id}",
-        )
+    # プレビュー表示
+    prefix = latest.content[:selection_start]
+    suffix = latest.content[selection_start:]
+    if suffix:
+        short = suffix[:120].replace("\n", "↵")
+        st.caption(f"削除される部分（{len(suffix)}字）: {short}{'...' if len(suffix) > 120 else ''}")
 
     reuse = st.session_state.pop("reuse_insertion", None)
     default_insertion = reuse if reuse else ""
-    col_main, col_btns = st.columns([4, 4])
-    with col_btns:
-        insertion = st.text_area("挿入する文", value=default_insertion, key=f"intervention-insertion-{latest.id}")
-        btn_col1, btn_col2 = st.columns(2)
-        with btn_col1:
-            if st.button("ここから再生成", key=f"intervention-regenerate-{latest.id}"):
-                return {
-                    "requestId": str(uuid4()),
-                    "action": "regenerate_from_here",
-                    "messageId": latest.id,
-                    "selectionStart": int(selection_start),
-                    "selectionEnd": int(selection_start),
-                }
-        with btn_col2:
-            if st.button("入力して続ける", key=f"intervention-insert-{latest.id}"):
-                return {
-                    "requestId": str(uuid4()),
-                    "action": "insert_and_continue",
-                    "messageId": latest.id,
-                    "selectionStart": int(selection_start),
-                    "selectionEnd": int(selection_start),
-                    "insertion": insertion,
-                }
+    insertion = st.text_area("挿入する文", value=default_insertion, key=f"intervention-insertion-{latest.id}")
+
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        if st.button("ここから再生成", key=f"intervention-regenerate-{latest.id}"):
+            return {
+                "requestId": str(uuid4()),
+                "action": "regenerate_from_here",
+                "messageId": latest.id,
+                "selectionStart": int(selection_start),
+                "selectionEnd": int(selection_start),
+            }
+    with btn_col2:
+        if st.button("入力して続ける", key=f"intervention-insert-{latest.id}"):
+            return {
+                "requestId": str(uuid4()),
+                "action": "insert_and_continue",
+                "messageId": latest.id,
+                "selectionStart": int(selection_start),
+                "selectionEnd": int(selection_start),
+                "insertion": insertion,
+            }
 
     return None
 
@@ -522,7 +571,7 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
         set_error(st.session_state, str(exc))
         return True
 
-    # Cancel any ongoing streaming (normal or intervention)
+    # 通常生成・介入生成のどちらでも、進行中のストリーミングを止める
     st.session_state["streaming_generator"] = None
 
     set_error(st.session_state, None)
@@ -573,13 +622,232 @@ def undo_last_intervention() -> None:
     set_error(st.session_state, None)
 
 
+def _thinking_badge() -> None:
+    if st.session_state["is_generating"]:
+        st.markdown('<span class="bw-thinking">🤖 推論中...</span>', unsafe_allow_html=True)
+
+
+def _init_code_panel_state() -> None:
+    for k in _CODE_PANEL_STATE_KEYS:
+        st.session_state.setdefault(k, None)
+
+
+def render_code_panel() -> None:
+    _init_code_panel_state()
+    settings: LlmSettings = st.session_state["llm_settings"]
+    is_generating = bool(st.session_state["is_generating"])
+    messages: list[ChatMessage] = st.session_state["messages"]
+    last_content = messages[-1].content if messages else ""
+
+    with st.container():
+        st.markdown('<div class="code-panel">', unsafe_allow_html=True)
+        st.subheader("🧪 コード検証")
+
+        # 新着メッセージ通知
+        if messages and last_content:
+            last_id = messages[-1].id if messages[-1].role == "assistant" else None
+            prev_checked = st.session_state.get("_code_checked_msg_id")
+            if last_id and last_id != prev_checked and not is_generating:
+                st.success("📩 新しいメッセージが届きました — 検証コードを実行して分析できます")
+                if st.button("🔍 クイック分析", key="quick_analyze_btn"):
+                    code = TEMPLATES.get("LLMで文体チェック", "")
+                    if code:
+                        st.session_state["code_panel_code"] = code
+                        st.session_state["code_panel_template"] = "LLMで文体チェック"
+                    st.session_state["_code_checked_msg_id"] = last_id
+                    st.rerun()
+
+        with st.expander("📖 使い方"):
+            st.markdown(VALIDATOR_HELP)
+            st.markdown(VALIDATOR_EXTRA_DOCS)
+
+        # テンプレート選択
+        template_names = list(TEMPLATES.keys())
+        prev_template = st.session_state.get("code_panel_template")
+        selected = st.selectbox(
+            "テンプレート",
+            options=["（選択してください）"] + template_names,
+            key="code_panel_template_selector",
+            disabled=is_generating,
+        )
+        if selected and selected != "（選択してください）" and selected != prev_template:
+            st.session_state["code_panel_code"] = TEMPLATES[selected]
+            st.session_state["code_panel_template"] = selected
+            st.rerun()
+
+        # コードエディタ
+        st.caption("検証コード")
+        code = st.text_area(
+            "コード",
+            value=st.session_state.get("code_panel_code") or "",
+            height=300,
+            key="code_panel_editor",
+            disabled=is_generating,
+            label_visibility="collapsed",
+        )
+
+        # アクションボタン
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            if st.button("🤖 コードを生成", disabled=is_generating or not messages, key="code_gen_btn"):
+                with st.spinner("コードを生成中..."):
+                    _generate_code_with_llm()
+                st.rerun()
+        with btn_col2:
+            if st.button("▶️ 実行", disabled=not code or not messages, key="code_exec_btn"):
+                with st.spinner("コードを実行中..."):
+                    result = _execute_code(code)
+                    st.session_state["code_panel_result"] = result
+                    st.session_state["code_panel_error"] = None
+                st.rerun()
+
+        # 結果表示
+        result = st.session_state.get("code_panel_result")
+        if result:
+            analysis = result.get("analysis", "")
+            if analysis:
+                st.info(analysis)
+
+            suggestions = result.get("suggestions", [])
+            if suggestions:
+                st.success(f"💡 {len(suggestions)}件の提案があります")
+                for i, sug in enumerate(suggestions):
+                    action = sug.get("action", "?")
+                    pos = sug.get("position", 0)
+                    text = sug.get("text", "")
+                    st.caption(f"{i+1}. {action} @ pos={pos}" + (f' — "{text[:40]}..."' if text else ""))
+
+                if st.button("✅ 提案を適用", key="code_apply_btn"):
+                    _apply_code_suggestion(suggestions)
+                    st.session_state["code_panel_result"] = None
+                    st.rerun()
+            else:
+                st.caption("提案はありません")
+        elif st.session_state.get("code_panel_error"):
+            st.error(st.session_state["code_panel_error"])
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+def _generate_code_with_llm() -> None:
+    messages: list[ChatMessage] = st.session_state["messages"]
+    settings: LlmSettings = st.session_state["llm_settings"]
+    if not messages:
+        return
+
+    last_user = ""
+    for m in reversed(messages):
+        if m.role == "user":
+            last_user = m.content
+            break
+    last_assistant = messages[-1].content if messages[-1].role == "assistant" else ""
+
+    if not last_assistant:
+        return
+
+    prompt = code_generation_prompt(last_user, last_assistant)
+    try:
+        code = generate_text(prompt, settings)
+        st.session_state["code_panel_code"] = code
+        st.session_state["code_panel_template"] = None
+    except LlmError as exc:
+        st.session_state["code_panel_error"] = str(exc)
+
+
+def _execute_code(code: str) -> dict[str, Any]:
+    messages: list[ChatMessage] = st.session_state["messages"]
+    settings: LlmSettings = st.session_state["llm_settings"]
+    last_content = messages[-1].content if messages else ""
+
+    env = {
+        "messages": messages,
+        "last_content": last_content,
+        "settings": settings,
+        "generate_text": generate_text,
+    }
+    return execute_validator_code(code, env)
+
+
+def _apply_code_suggestion(suggestions: list[dict[str, Any]]) -> None:
+    messages: list[ChatMessage] = st.session_state["messages"]
+    if not messages or not suggestions:
+        return
+    latest = messages[-1]
+    if latest.role != "assistant":
+        return
+
+    sug = suggestions[0]
+    action = sug.get("action", "insert_and_continue")
+    pos = sug.get("position", len(latest.content))
+    insertion = sug.get("text", "")
+    if action == "regenerate_from_here":
+        event = {
+            "requestId": str(uuid4()),
+            "action": "regenerate_from_here",
+            "messageId": latest.id,
+            "selectionStart": pos,
+            "selectionEnd": pos,
+        }
+    else:
+        event = {
+            "requestId": str(uuid4()),
+            "action": "insert_and_continue",
+            "messageId": latest.id,
+            "selectionStart": pos,
+            "selectionEnd": pos,
+            "insertion": insertion,
+        }
+    handle_intervention_event(event)
+
+
+def _first_launch_wizard() -> None:
+    """初回起動時に自動プローブとモデル選択を案内する."""
+    settings: LlmSettings = st.session_state["llm_settings"]
+    if st.session_state["messages"] or settings.model.strip():
+        return
+
+    st.info("### 🚀 Branch Writer へようこそ！\n\nまずはAIモデルに接続します。")
+
+    with st.spinner("ローカルLLMを検出中..."):
+        resolved = _probe_base_url("")
+        if resolved:
+            settings.base_url = resolved
+            st.success(f"✅ エンドポイントを検出: `{resolved}`")
+        else:
+            st.error(
+                "❌ Ollama / LM Studio が見つかりません。\n\n"
+                "- **Ollama**: https://ollama.com/download からインストール後、`ollama pull llama3.2:1b` を実行\n"
+                "- **LM Studio**: https://lmstudio.ai からインストール後、モデルを読み込んでLocal Inference Serverを起動\n\n"
+                "設定後、画面左のサイドバーで接続設定を行ってください。"
+            )
+            return
+
+    models = discover_models_sync(resolved)
+    if models:
+        st.session_state["available_models"] = models
+        settings.model = models[0]["name"]
+        ctx, out = lookup_model_capabilities(settings.model)
+        settings.context_window = ctx
+        settings.max_tokens = out
+        st.success(f"✅ モデル `{settings.model}` を選択しました。")
+    else:
+        st.warning(
+            "⚠️  エンドポイントは検出できましたが、利用可能なモデルが見つかりません。\n\n"
+            "サイドバーの「🔄 モデル一覧を再取得」ボタンを試すか、モデル名を直接入力してください。"
+        )
+
+    st.button("OK, はじめる", key="wizard_dismiss")
+
+
 def main() -> None:
-    st.set_page_config(page_title="Branch Writer", page_icon="✍️", layout="centered")
+    st.set_page_config(page_title="Branch Writer", page_icon="✍️", layout="wide")
     initialize_state(st.session_state)
-    _inject_cursor_css()
+    _inject_custom_css()
 
     st.title("Branch Writer")
-    st.caption("チャットして、AIの返答の途中に割り込んで、書き換えて、続きを紡ぐ。")
+    _thinking_badge()
+
+    _first_launch_wizard()
 
     if st.session_state["is_generating"] and st.session_state.get("streaming_generator"):
         continue_streaming()
@@ -591,17 +859,21 @@ def main() -> None:
     if last_error:
         st.error(last_error)
 
-    render_messages()
+    col_chat, col_code = st.columns([0.65, 0.35], gap="large")
+    with col_chat:
+        render_messages()
+        event = render_intervention_panel()
+        if event:
+            handle_intervention_event(event)
+            st.rerun()
 
-    event = render_intervention_panel()
-    if event:
-        handle_intervention_event(event)
-        st.rerun()
+        prompt = st.chat_input("メッセージを入力", disabled=bool(st.session_state["is_generating"]))
+        if prompt:
+            handle_user_prompt(prompt)
+            st.rerun()
 
-    prompt = st.chat_input("メッセージを入力", disabled=bool(st.session_state["is_generating"]))
-    if prompt:
-        handle_user_prompt(prompt)
-        st.rerun()
+    with col_code:
+        render_code_panel()
 
 
 if __name__ == "__main__":

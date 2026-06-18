@@ -52,41 +52,6 @@ def _chat_payload(
     }
 
 
-def _post_chat_completion(
-    *,
-    api_messages: list[dict[str, str]],
-    settings: LlmSettings,
-) -> dict[str, Any]:
-    payload = _chat_payload(api_messages=api_messages, settings=settings, stream=False)
-    url = _chat_completions_url(settings)
-    timeout_seconds = settings.request_timeout_seconds
-
-    try:
-        response = httpx.post(
-            url,
-            headers=_headers(settings),
-            json=payload,
-            timeout=timeout_seconds,
-        )
-    except httpx.TimeoutException as exc:
-        raise LlmError(f"LLM request timed out after {timeout_seconds:.0f}s: {url}") from exc
-    except httpx.RequestError as exc:
-        raise LlmError(f"LLM request failed: {exc}") from exc
-
-    if response.status_code >= 400:
-        body = response.text[:2000]
-        raise LlmError(f"LLM HTTP {response.status_code}: {body}")
-
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise LlmError(f"LLM returned non-JSON response: {response.text[:2000]}") from exc
-
-    if not isinstance(data, dict):
-        raise LlmError(f"LLM returned unexpected response type: {type(data).__name__}")
-
-    return data
-
 
 def _iter_chat_completion_chunks(
     *,
@@ -135,33 +100,6 @@ def _iter_chat_completion_chunks(
         raise LlmError(f"LLM stream failed: {exc}") from exc
 
 
-def _extract_content(data: dict[str, Any]) -> str:
-    choices = data.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise LlmError(f"LLM returned no choices. Raw response: {str(data)[:2000]}")
-
-    first = choices[0]
-    if not isinstance(first, dict):
-        raise LlmError(f"LLM returned invalid choice: {str(first)[:2000]}")
-
-    message = first.get("message")
-    if isinstance(message, dict):
-        content = message.get("content")
-        if isinstance(content, str) and content:
-            return content
-
-    text = first.get("text")
-    if isinstance(text, str) and text:
-        return text
-
-    delta = first.get("delta")
-    if isinstance(delta, dict):
-        content = delta.get("content")
-        if isinstance(content, str) and content:
-            return content
-
-    raise LlmError(f"LLM returned no message content. Raw choice: {str(first)[:2000]}")
-
 
 def _extract_delta_content(data: dict[str, Any]) -> str:
     choices = data.get("choices")
@@ -191,6 +129,12 @@ def _extract_delta_content(data: dict[str, Any]) -> str:
     return ""
 
 
+def generate_text(prompt: str, settings: LlmSettings) -> str:
+    """Generate a one-shot text response without mutating conversation state."""
+    msg = ChatMessage(role="user", content=prompt)
+    return "".join(iter_chat_response([msg], settings))
+
+
 def iter_chat_response(
     messages: list[ChatMessage],
     settings: LlmSettings,
@@ -198,26 +142,19 @@ def iter_chat_response(
     """Yield a normal assistant response as streaming chunks."""
     _validate_or_raise(settings)
     yield from _iter_chat_completion_chunks(
-        api_messages=to_openai_messages(messages),
+        api_messages=to_openai_messages(messages, system_prompt=settings.system_prompt),
         settings=settings,
     )
-
-
-def generate_chat_response(
-    messages: list[ChatMessage],
-    settings: LlmSettings,
-) -> str:
-    """Generate a normal assistant response from chat history."""
-    return "".join(iter_chat_response(messages, settings))
 
 
 def _intervention_messages(
     frozen_messages: list[ChatMessage],
     assistant_prefix: str,
     insertion: str,
+    system_prompt: str = "",
 ) -> list[dict[str, str]]:
     continuation_base = assistant_prefix + insertion
-    api_messages = to_openai_messages(frozen_messages)
+    api_messages = to_openai_messages(frozen_messages, system_prompt=system_prompt)
     api_messages.append({"role": "assistant", "content": continuation_base})
     return api_messages
 
@@ -231,23 +168,12 @@ def iter_intervention_continuation(
     """Yield an intervention continuation as streaming chunks."""
     _validate_or_raise(settings)
     yield from _iter_chat_completion_chunks(
-        api_messages=_intervention_messages(frozen_messages, assistant_prefix, insertion),
+        api_messages=_intervention_messages(
+            frozen_messages, assistant_prefix, insertion,
+            system_prompt=settings.system_prompt,
+        ),
         settings=settings,
     )
 
 
-def generate_intervention_continuation(
-    frozen_messages: list[ChatMessage],
-    assistant_prefix: str,
-    insertion: str,
-    settings: LlmSettings,
-) -> str:
-    """Generate only the continuation after an intervention point."""
-    return "".join(
-        iter_intervention_continuation(
-            frozen_messages=frozen_messages,
-            assistant_prefix=assistant_prefix,
-            insertion=insertion,
-            settings=settings,
-        )
-    )
+

@@ -72,6 +72,9 @@ def frozen_messages_before_latest(messages: list[ChatMessage]) -> list[ChatMessa
     return messages[:-1]
 
 
-def to_openai_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
+def to_openai_messages(messages: list[ChatMessage], system_prompt: str = "") -> list[dict[str, str]]:
     """Convert chat history to OpenAI-compatible chat messages."""
-    return [message.to_openai_message() for message in messages]
+    result = [message.to_openai_message() for message in messages]
+    if system_prompt:
+        result.insert(0, {"role": "system", "content": system_prompt})
+    return result
