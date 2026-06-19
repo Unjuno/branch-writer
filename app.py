@@ -551,8 +551,8 @@ def render_messages() -> None:
                         disabled=(not has_selection) or cursor_loop_streaming,
                     )
                 with btn_cols[2]:
-                    if insertion.strip() and not cursor_loop_streaming:
-                        if st.button("挿入して続ける", key=f"insert-{message.id}"):
+                    if insertion.strip():
+                        if st.button("挿入して続ける", key=f"insert-{message.id}", disabled=cursor_loop_streaming):
                             event = {
                                 "requestId": f"{message.id}:insert:{__import__('time').time()}",
                                 "action": "insert_and_continue",
