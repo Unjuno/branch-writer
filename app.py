@@ -476,6 +476,7 @@ def render_messages() -> None:
                             {"role": m.role, "content": m.content, "id": m.id}
                             for m in frozen
                         ],
+                        "baseContent": intervention_state.get("base_content", ""),
                         "assistantPrefix": intervention_state.get("assistant_prefix", ""),
                         "insertion": intervention_state.get("insertion", ""),
                         "action": intervention_state.get("action", "regenerate_from_here"),
@@ -485,21 +486,29 @@ def render_messages() -> None:
 
             # インタベンションボタンをチャットの上に表示
             if can_intervene:
+                has_selection = f"_selected_line_{message.id}" in st.session_state
                 sel = st.session_state.get(f"_selected_line_{message.id}", len(message.content))
                 at_end = sel >= len(message.content)
 
-                st.caption(f"📍 カーソル位置: {sel} / {len(message.content)} 文字目")
+                if not has_selection:
+                    st.caption("👆 行をクリックして再生性位置を選択してください")
+                else:
+                    st.caption(f"📍 カーソル位置: {sel} / {len(message.content)} 文字目")
                 btn_cols = st.columns([1, 3, 1])
                 with btn_cols[0]:
-                    btn_label = "全文再生成" if at_end else "✂ ここから再生成"
-                    effective_sel = 0 if at_end else sel
-                    if st.button(btn_label, key=f"regen-{message.id}"):
+                    regen_disabled = not has_selection or at_end
+                    regen_label = "✂ ここから再生成"
+                    if not has_selection:
+                        regen_label = "位置未選択"
+                    elif at_end:
+                        regen_label = "末尾は再生成できません"
+                    if st.button(regen_label, key=f"regen-{message.id}", disabled=regen_disabled):
                         event = {
                             "requestId": f"{message.id}:regenerate:{__import__('time').time()}",
                             "action": "regenerate_from_here",
                             "messageId": message.id,
-                            "selectionStart": effective_sel,
-                            "selectionEnd": effective_sel,
+                            "selectionStart": sel,
+                            "selectionEnd": sel,
                         }
                         st.session_state["_intervention_event"] = event
                         st.rerun()
@@ -510,6 +519,7 @@ def render_messages() -> None:
                         placeholder="ここにテキストを入力...",
                         key=f"insert-input-{message.id}",
                         label_visibility="collapsed",
+                        disabled=not has_selection,
                     )
                 with btn_cols[2]:
                     if insertion.strip():
@@ -1142,12 +1152,14 @@ def main() -> None:
     if last_error:
         st.error(last_error)
 
-    render_messages()
-
+    # 介入イベントはrender_messagesより前に処理する
+    # (古い全文が一瞬描画される「ちらつき」を防止するため)
     intervention_event = st.session_state.pop("_intervention_event", None)
     if intervention_event:
         handle_intervention_event(intervention_event)
         st.rerun()
+
+    render_messages()
 
     if not component_available():
         event = render_intervention_panel()

@@ -106,6 +106,13 @@ function LatestMessageEditor(props: ComponentProps) {
     }
   }, [initialContent, isActivelyStreaming])
 
+  const getInterventionBase = (p: Record<string, unknown>): string => {
+    if (typeof p.baseContent === "string") return p.baseContent
+    const prefix = typeof p.assistantPrefix === "string" ? p.assistantPrefix : ""
+    const insertion = typeof p.insertion === "string" ? p.insertion : ""
+    return prefix + insertion
+  }
+
   const generateStreamId = useCallback(() => {
     return `${messageId}:stream:${Date.now()}:${Math.random().toString(36).slice(2)}`
   }, [messageId])
@@ -120,9 +127,9 @@ function LatestMessageEditor(props: ComponentProps) {
     doneSentRef.current = false
     failedStreamKeyRef.current = "" // clear any previous failure
     setStreamId(newStreamId)
-    // For intervention mode, start from the assistant prefix so tokens append correctly
-    accumulatedRef.current = mode === "intervention" && extraParams.assistantPrefix
-      ? (extraParams.assistantPrefix as string)
+    // For intervention mode, start from baseContent (prefix + insertion) so tokens append correctly
+    accumulatedRef.current = mode === "intervention"
+      ? getInterventionBase(extraParams)
       : ""
 
     abortControllerRef.current?.abort()
@@ -306,6 +313,7 @@ function LatestMessageEditor(props: ComponentProps) {
         const hasIntervention = interventionData && Object.keys(interventionData).length > 0
         if (hasIntervention) {
           startStreaming("intervention", {
+            baseContent: interventionData.baseContent,
             assistantPrefix: interventionData.assistantPrefix,
             insertion: interventionData.insertion,
             action: interventionData.action,
