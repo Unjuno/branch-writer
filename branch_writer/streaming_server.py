@@ -192,7 +192,7 @@ async def stream_endpoint(request: Request) -> StreamingResponse:
     abort_event = threading.Event()
     _active_streams[stream_id] = abort_event
 
-    if mode == "intervention":
+    if mode in ("intervention", "cursor_loop"):
         frozen_data = body.get("frozenMessages", [])
         frozen_messages = [ChatMessage(**m) for m in frozen_data]
         generator = _stream_intervention(

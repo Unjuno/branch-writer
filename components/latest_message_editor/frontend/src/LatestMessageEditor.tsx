@@ -21,6 +21,8 @@ type LatestMessageEditorArgs = {
   streamingUrl?: string
   isStreaming?: boolean
   interventionData?: Record<string, unknown> | null
+  cursorLoopEnabled?: boolean
+  previewContent?: string
   messagesForStream?: Array<{ role: string; content: string; id: string }>
   llmSettings?: {
     base_url: string
@@ -73,6 +75,8 @@ function LatestMessageEditor(props: ComponentProps) {
   const streamingUrl = args.streamingUrl ?? ""
   const isStreaming = Boolean(args.isStreaming)
   const interventionData = args.interventionData ?? null
+  const cursorLoopEnabled = Boolean(args.cursorLoopEnabled)
+  const previewContent = args.previewContent ?? ""
   const messagesForStream = args.messagesForStream ?? []
   const llmSettings = args.llmSettings ?? null
 
@@ -100,11 +104,16 @@ function LatestMessageEditor(props: ComponentProps) {
     Streamlit.setFrameHeight()
   }, [textWithCursor, hoveredLine])
 
+  // When cursor loop has a completed preview, show it (overrides initialContent)
+  const hasPreview = cursorLoopEnabled && previewContent && !isActivelyStreaming
+
   useEffect(() => {
-    if (!isActivelyStreaming) {
+    if (hasPreview) {
+      setDisplayContent(previewContent)
+    } else if (!isActivelyStreaming) {
       setDisplayContent(initialContent)
     }
-  }, [initialContent, isActivelyStreaming])
+  }, [initialContent, isActivelyStreaming, hasPreview, previewContent])
 
   const getInterventionBase = (p: Record<string, unknown>): string => {
     if (typeof p.baseContent === "string") return p.baseContent

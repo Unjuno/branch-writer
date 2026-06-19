@@ -38,6 +38,22 @@ def test_initialize_state_sets_defaults() -> None:
     assert state["streaming_intervention"] is None
     assert state["kw_filter"]["enabled"] is True
     assert state["validator"]["enabled"] is False
+    assert state["cursor_loop"]["enabled"] is False
+    assert state["cursor_loop"]["status"] == "idle"
+    assert state["cursor_loop"]["preview_content"] == ""
+
+
+def test_initialize_state_repairs_cursor_loop_partial_dict() -> None:
+    state: dict = {}
+    state["cursor_loop"] = {"enabled": True}
+    initialize_state(state)
+    cl = state["cursor_loop"]
+    assert cl["enabled"] is True
+    assert cl["status"] == "idle"
+    assert cl["preview_content"] == ""
+    assert cl["original_content"] == ""
+    assert cl["cursor_pos"] is None
+    assert cl["message_id"] is None
 
 
 def test_initialize_state_migrates_legacy_llm_settings() -> None:
