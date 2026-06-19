@@ -318,7 +318,7 @@ function LatestMessageEditor(props: ComponentProps) {
     }
 
     // Build a key to identify the logical stream (used to prevent re-stream after failure)
-    const currentStreamKey = `${messageId}:${streamModeRef.current}:${interventionKey}`
+    const currentStreamKey = streamKeyFromData || `${messageId}:${streamModeRef.current}:${interventionKey}`
 
     if (isStreaming && !completedRef.current && streamingUrl && !streamId) {
       // Skip if this same stream already failed (wait for isStreaming=false to clear)
@@ -348,7 +348,7 @@ function LatestMessageEditor(props: ComponentProps) {
       completedRef.current = false
       failedStreamKeyRef.current = ""
     }
-  }, [isStreaming, streamingUrl, streamId, startStreaming, interventionData, interventionKey, messageId])
+  }, [isStreaming, streamingUrl, streamId, startStreaming, interventionData, interventionKey, messageId, streamKeyFromData])
 
   useEffect(() => {
     return () => { abortControllerRef.current?.abort() }

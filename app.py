@@ -499,6 +499,7 @@ def render_messages() -> None:
                     }
 
             # インタベンションボタン (can_intervene のときだけ表示)
+            cursor_loop_streaming = cl.get("enabled") and cl.get("status") == "streaming"
             if can_intervene:
                 cl_enabled = st.checkbox(
                     "🔁 Cursor Loop",
@@ -522,12 +523,14 @@ def render_messages() -> None:
                     st.caption(f"📍 カーソル位置: {sel} / {len(message.content)} 文字目")
                 btn_cols = st.columns([1, 3, 1])
                 with btn_cols[0]:
-                    regen_disabled = not has_selection or at_end
+                    regen_disabled = (not has_selection or at_end) or cursor_loop_streaming
                     regen_label = "✂ ここから再生成"
                     if not has_selection:
                         regen_label = "位置未選択"
                     elif at_end:
                         regen_label = "末尾は再生成できません"
+                    elif cursor_loop_streaming:
+                        regen_label = "Cursor Loop生成中"
                     if st.button(regen_label, key=f"regen-{message.id}", disabled=regen_disabled):
                         event = {
                             "requestId": f"{message.id}:regenerate:{__import__('time').time()}",
@@ -545,7 +548,7 @@ def render_messages() -> None:
                         placeholder="ここにテキストを入力...",
                         key=f"insert-input-{message.id}",
                         label_visibility="collapsed",
-                        disabled=not has_selection,
+                        disabled=(not has_selection) or cursor_loop_streaming,
                     )
                 with btn_cols[2]:
                     if insertion.strip():
@@ -1080,19 +1083,7 @@ def handle_cursor_loop_position(message_id: str, selection_start: int) -> None:
 
     stream_key = f"{message_id}:intervention:{selection_start}::regenerate_from_here"
 
-    # P0-6: abort old cursor loop stream if running
-    old_intervention = st.session_state.get("streaming_intervention")
-    if old_intervention and old_intervention.get("_cursor_loop"):
-        old_stream_id = old_intervention.get("stream_id", "")
-        if old_stream_id:
-            try:
-                import urllib.request
-                abort_body = f'{{"streamId":"{old_stream_id}"}}'.encode()
-                req = urllib.request.Request(f"{_STREAMING_URL}/api/abort", data=abort_body, method="POST")
-                req.add_header("Content-Type", "application/json")
-                urllib.request.urlopen(req, timeout=2)
-            except Exception:
-                logger.debug("handle_cursor_loop_position: abort old stream failed", exc_info=True)
+    # P0-6: abort is handled by React's AbortController + stale guard (P1-1: removed dead stream_id code)
 
     # Save preview state — do NOT touch latest.content or latest.status (P0-2)
     st.session_state["cursor_loop"]["original_content"] = original_content
@@ -1131,8 +1122,8 @@ def handle_cursor_loop_preview(content: str, stream_key: str = "") -> None:
     """
     cl = st.session_state["cursor_loop"]
 
-    # P0-5: stale guard — ignore if stream_key doesn't match
-    if stream_key and cl.get("stream_key") and stream_key != cl.get("stream_key"):
+    # P0-5: stale guard — ignore if stream_key doesn't match (P1-3: empty is also stale)
+    if not stream_key or (cl.get("stream_key") and stream_key != cl.get("stream_key")):
         logger.debug("handle_cursor_loop_preview: stale event ignored (stream_key mismatch)")
         return
 
@@ -1157,8 +1148,8 @@ def handle_cursor_loop_error(message: str, content: str = "", stream_key: str = 
     """
     cl = st.session_state["cursor_loop"]
 
-    # P0-5: stale guard
-    if stream_key and cl.get("stream_key") and stream_key != cl.get("stream_key"):
+    # P0-5: stale guard (P1-3: empty is also stale)
+    if not stream_key or (cl.get("stream_key") and stream_key != cl.get("stream_key")):
         logger.debug("handle_cursor_loop_error: stale event ignored (stream_key mismatch)")
         return
 
