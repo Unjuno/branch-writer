@@ -59,7 +59,9 @@ MODEL_CAPABILITIES: dict[str, tuple[int, int]] = {
 
 def lookup_model_capabilities(model_name: str) -> tuple[int, int]:
     """Return (context_window, max_tokens) guessed from model name."""
-    name_lower = model_name.lower().strip().rstrip(":latest")
+    name_lower = model_name.lower().strip()
+    if name_lower.endswith(":latest"):
+        name_lower = name_lower[:-len(":latest")]
     # Exact match first (e.g. "llama3.2:3b" -> "llama3.2")
     for prefix, (ctx, out) in MODEL_CAPABILITIES.items():
         if name_lower.startswith(prefix):
@@ -97,6 +99,11 @@ def normalize_openai_base_url(base_url: str) -> str:
     stripped = base_url.strip().rstrip("/")
     if not stripped:
         return stripped
+
+    # /v1/chat/completions が直接入力された場合の誤二重付与を防止
+    for suffix in ("/chat/completions", "/v1"):
+        if stripped.rstrip("/").endswith(suffix):
+            stripped = stripped.rstrip("/")[:-len(suffix)]
 
     parsed = urlparse(stripped)
     if parsed.path in {"", "/"}:

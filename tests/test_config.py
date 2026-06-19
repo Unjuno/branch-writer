@@ -110,3 +110,7 @@ def test_normalize_openai_base_url_trims_trailing_slash() -> None:
 
 def test_normalize_openai_base_url_preserves_custom_path() -> None:
     assert normalize_openai_base_url("http://localhost:1234/api") == "http://localhost:1234/api"
+
+
+def test_normalize_openai_base_url_strips_chat_completions_suffix() -> None:
+    assert normalize_openai_base_url("http://localhost:1234/v1/chat/completions") == "http://localhost:1234/v1"
