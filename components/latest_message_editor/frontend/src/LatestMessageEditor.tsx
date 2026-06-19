@@ -84,6 +84,8 @@ function LatestMessageEditor(props: ComponentProps) {
   const accumulatedRef = useRef("")
   const doneSentRef = useRef(false)
   const completedRef = useRef(false)
+  const failedStreamKeyRef = useRef("")
+  const streamModeRef = useRef("normal")
 
   const isActivelyStreaming = isStreaming && streamId !== null
 
@@ -112,8 +114,11 @@ function LatestMessageEditor(props: ComponentProps) {
     if (!streamingUrl || !llmSettings) return
 
     const newStreamId = generateStreamId()
-    console.log("[BranchWriter] startStreaming:", { mode, streamId: newStreamId })
+    streamModeRef.current = mode
+    const thisStreamKey = `${messageId}:${mode}:${extraParams.streamKeySuffix ?? ""}`
+    console.log("[BranchWriter] startStreaming:", { mode, streamId: newStreamId, streamKey: thisStreamKey })
     doneSentRef.current = false
+    failedStreamKeyRef.current = "" // clear any previous failure
     setStreamId(newStreamId)
     // For intervention mode, start from the assistant prefix so tokens append correctly
     accumulatedRef.current = mode === "intervention" && extraParams.assistantPrefix
@@ -153,7 +158,7 @@ function LatestMessageEditor(props: ComponentProps) {
         const { done, value } = await reader.read()
         if (done) {
           // Stream ended without an SSE done/error event (e.g. server crash)
-          completedRef.current = false
+          failedStreamKeyRef.current = thisStreamKey
           if (!doneSentRef.current) {
             doneSentRef.current = true
             const finalContent = accumulatedRef.current
@@ -196,6 +201,8 @@ function LatestMessageEditor(props: ComponentProps) {
                 accumulatedRef.current = finalContent
                 setDisplayContent(finalContent)
                 console.log("[BranchWriter] streaming done:", { contentLen: finalContent.length })
+                // Clear any recorded failure — this stream succeeded
+                failedStreamKeyRef.current = ""
                 if (!doneSentRef.current && finalContent.length > 0) {
                   doneSentRef.current = true
                   const doneEvent: StreamingDoneEvent = {
@@ -211,7 +218,7 @@ function LatestMessageEditor(props: ComponentProps) {
                 return
               } else if (eventType === "error") {
                 console.error("Stream error:", parsed.message)
-                completedRef.current = false
+                failedStreamKeyRef.current = thisStreamKey
                 const finalContent = accumulatedRef.current
                 if (!doneSentRef.current) {
                   doneSentRef.current = true
@@ -228,7 +235,7 @@ function LatestMessageEditor(props: ComponentProps) {
                 }
                 return
               } else if (eventType === "aborted") {
-                completedRef.current = false
+                failedStreamKeyRef.current = thisStreamKey
                 if (abortControllerRef.current === controller) {
                   setStreamId(null)
                 }
@@ -244,7 +251,7 @@ function LatestMessageEditor(props: ComponentProps) {
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         console.error("Streaming error:", err)
-        completedRef.current = false
+        failedStreamKeyRef.current = thisStreamKey
         const finalContent = accumulatedRef.current
         if (!doneSentRef.current) {
           doneSentRef.current = true
@@ -258,7 +265,7 @@ function LatestMessageEditor(props: ComponentProps) {
         }
       } else {
         // AbortError: stream was intentionally cancelled, not an error
-        completedRef.current = false
+        failedStreamKeyRef.current = thisStreamKey
       }
       if (abortControllerRef.current === controller) {
         setStreamId(null)
@@ -282,30 +289,41 @@ function LatestMessageEditor(props: ComponentProps) {
     // When interventionData changes semantically, abort old stream and reset
     if (keyChanged && interventionKey) {
       completedRef.current = false
+      failedStreamKeyRef.current = ""
       abortControllerRef.current?.abort()
       setStreamId(null)
     }
 
+    // Build a key to identify the logical stream (used to prevent re-stream after failure)
+    const currentStreamKey = `${messageId}:${streamModeRef.current}:${interventionKey}`
+
     if (isStreaming && !completedRef.current && streamingUrl && !streamId) {
-      completedRef.current = true
-      const hasIntervention = interventionData && Object.keys(interventionData).length > 0
-      if (hasIntervention) {
-        startStreaming("intervention", {
-          assistantPrefix: interventionData.assistantPrefix,
-          insertion: interventionData.insertion,
-          action: interventionData.action,
-          beforeContent: interventionData.beforeContent,
-          selectionStart: interventionData.selectionStart,
-          frozenMessages: interventionData.frozenMessages,
-        })
+      // Skip if this same stream already failed (wait for isStreaming=false to clear)
+      if (failedStreamKeyRef.current === currentStreamKey) {
+        console.log("[BranchWriter] skip re-stream (previous attempt failed):", currentStreamKey)
       } else {
-        startStreaming("normal")
+        completedRef.current = true
+        const hasIntervention = interventionData && Object.keys(interventionData).length > 0
+        if (hasIntervention) {
+          startStreaming("intervention", {
+            assistantPrefix: interventionData.assistantPrefix,
+            insertion: interventionData.insertion,
+            action: interventionData.action,
+            beforeContent: interventionData.beforeContent,
+            selectionStart: interventionData.selectionStart,
+            frozenMessages: interventionData.frozenMessages,
+            streamKeySuffix: interventionKey,
+          })
+        } else {
+          startStreaming("normal")
+        }
       }
     }
     if (!isStreaming) {
       completedRef.current = false
+      failedStreamKeyRef.current = ""
     }
-  }, [isStreaming, streamingUrl, streamId, startStreaming, interventionData, interventionKey])
+  }, [isStreaming, streamingUrl, streamId, startStreaming, interventionData, interventionKey, messageId])
 
   useEffect(() => {
     return () => { abortControllerRef.current?.abort() }
@@ -314,12 +332,15 @@ function LatestMessageEditor(props: ComponentProps) {
   const selectLine = useCallback((lineIndex: number) => {
     if (disabled) return
 
+    // Array.fromでUnicode code point単位の長さを取得 (絵文字などでも正しい位置になる)
     const lines = displayContent.split("\n")
+    const codePointCounts = lines.map(l => Array.from(l).length)
     let charPos = 0
     for (let i = 0; i < lineIndex && i < lines.length; i++) {
-      charPos += lines[i].length + 1
+      charPos += codePointCounts[i] + 1
     }
-    charPos = Math.min(charPos, displayContent.length)
+    const totalCodePoints = Array.from(displayContent).length
+    charPos = Math.min(charPos, totalCodePoints)
 
     setSelectionStart(charPos)
     setHoveredLine(lineIndex)

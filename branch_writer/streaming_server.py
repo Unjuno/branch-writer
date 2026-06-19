@@ -10,6 +10,7 @@ from collections.abc import Generator
 from typing import Any
 
 import httpx
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -112,15 +113,17 @@ def _stream_intervention(
     stream_id: str,
 ) -> Generator[str, None, None]:
     """Stream an intervention continuation character by character."""
-    logger.info("_stream_intervention: streamId=%s, action=%s, selectionStart=%d, prefix=%d chars",
-                stream_id, action, selection_start, len(assistant_prefix))
+    base_content = assistant_prefix + insertion
+    logger.info("_stream_intervention: streamId=%s, action=%s, selectionStart=%d, base=%d chars",
+                stream_id, action, selection_start, len(base_content))
     abort = _active_streams.get(stream_id)
     raw_continuation = ""
+    last_clean_len = 0
     try:
         for chunk in _iter_chat_completion_chunks(
             api_messages=[
                 *to_openai_messages(frozen_messages, system_prompt=settings.system_prompt),
-                {"role": "assistant", "content": assistant_prefix + insertion},
+                {"role": "assistant", "content": base_content},
             ],
             settings=settings,
         ):
@@ -128,9 +131,13 @@ def _stream_intervention(
                 yield _sse_event("aborted", {"streamId": stream_id})
                 return
             raw_continuation += chunk
-            clean = strip_continuation_overlap(assistant_prefix, raw_continuation)
-            full_content = assistant_prefix + insertion + clean
-            for char in clean:
+            # overlap strippingはbase_content基準 (assistant_prefix + insertion) で行う
+            clean = strip_continuation_overlap(base_content, raw_continuation)
+            full_content = base_content + clean
+            # deltaのみ送信 (毎chunkごとにclean全文を再送しない)
+            new_chars = clean[last_clean_len:]
+            last_clean_len = len(clean)
+            for char in new_chars:
                 if abort and abort.is_set():
                     yield _sse_event("aborted", {"streamId": stream_id})
                     return
@@ -145,8 +152,8 @@ def _stream_intervention(
                         "insertion": insertion,
                     },
                 )
-        clean = strip_continuation_overlap(assistant_prefix, raw_continuation)
-        full_content = assistant_prefix + insertion + clean
+        clean = strip_continuation_overlap(base_content, raw_continuation)
+        full_content = base_content + clean
         logger.info("_stream_intervention: done, streamId=%s, %d chars", stream_id, len(full_content))
         yield _sse_event(
             "done",
@@ -231,7 +238,6 @@ async def abort_endpoint(request: Request) -> dict[str, str]:
 def start_server(port: int = 8765) -> None:
     """Start the FastAPI server in a background thread (idempotent, once per process)."""
     global _server_started
-    import uvicorn
 
     with _server_lock:
         if _server_started:

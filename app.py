@@ -50,13 +50,14 @@ logging.basicConfig(
 )
 
 # RotatingFileHandler で branch_writer.log の肥大化を防止（最大5MB, 3世代）
-# 読み取り専用環境では失敗しても無視する
-try:
-    _file_handler = RotatingFileHandler("branch_writer.log", encoding="utf-8", maxBytes=5 * 1024 * 1024, backupCount=3)
-    _file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    logging.getLogger().addHandler(_file_handler)
-except (OSError, PermissionError):
-    pass
+# 読み取り専用環境では失敗しても無視する。rerunによる重複追加も防止する。
+if not any(isinstance(h, RotatingFileHandler) for h in logging.getLogger().handlers):
+    try:
+        _file_handler = RotatingFileHandler("branch_writer.log", encoding="utf-8", maxBytes=5 * 1024 * 1024, backupCount=3)
+        _file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logging.getLogger().addHandler(_file_handler)
+    except (OSError, PermissionError):
+        pass
 
 logger = logging.getLogger("branch_writer.app")
 
@@ -356,9 +357,13 @@ def reset_chat_state() -> None:
     st.session_state["validator"]["results"] = None
 
 
+def _escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def render_frozen_message(message: ChatMessage) -> None:
     with st.chat_message(message.role):
-        st.markdown(message.content, unsafe_allow_html=True)
+        st.markdown(_escape_html(message.content), unsafe_allow_html=False)
         if message.content:
             tokens = estimate_tokens(message.content)
             st.caption(f"~{tokens:,} tokens | {len(message.content):,} chars")
@@ -562,7 +567,7 @@ def render_messages() -> None:
                         st.session_state[f"_selected_line_{message.id}"] = event.get("selectionStart", 0)
         elif message.role == "assistant" and message.status == "streaming":
             with st.chat_message("assistant"):
-                content = message.content
+                content = _escape_html(message.content)
                 if content:
                     content = content + _cursor_span()
                 st.markdown(content, unsafe_allow_html=True)
@@ -1108,11 +1113,15 @@ def _first_launch_wizard() -> None:
 
 
 def _start_streaming_server() -> None:
-    """Start the SSE streaming server if not already running."""
+    """Start the SSE streaming server if not already running (idempotent)."""
     if not st.session_state.get("_streaming_server_started"):
         logger.info("_start_streaming_server: starting SSE server on port %d", _STREAMING_PORT)
-        st.session_state["_streaming_server_started"] = True
-        start_server(port=_STREAMING_PORT)
+        try:
+            start_server(port=_STREAMING_PORT)
+            st.session_state["_streaming_server_started"] = True
+        except RuntimeError as exc:
+            st.error(str(exc))
+            set_error(st.session_state, str(exc))
 
 
 def main() -> None:
