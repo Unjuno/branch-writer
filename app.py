@@ -352,9 +352,12 @@ def reset_chat_state() -> None:
         "enabled": False,
         "message_id": None,
         "original_content": "",
+        "base_content": "",
         "cursor_pos": None,
         "preview_content": "",
         "status": "idle",
+        "stream_key": None,
+        "error": None,
     }
     st.session_state["available_models"] = []
     st.session_state["kw_filter"]["retry_count"] = 0
@@ -470,13 +473,15 @@ def render_messages() -> None:
 
         if is_latest_intervenable and component_available():
             in_intervention = st.session_state.get("streaming_intervention") is not None
+            intervention_state = st.session_state.get("streaming_intervention", {})
+            # P0-3: cursor loop should not block cursor movement
+            is_cursor_loop_stream = bool(intervention_state and intervention_state.get("_cursor_loop"))
             generating = bool(st.session_state["is_generating"])
-            disabled = in_intervention
-            can_intervene = not disabled
+            disabled = in_intervention and not is_cursor_loop_stream
+            can_intervene = not (in_intervention and not is_cursor_loop_stream)
 
             intervention_data = None
             if in_intervention:
-                intervention_state = st.session_state.get("streaming_intervention", {})
                 if intervention_state:
                     frozen = intervention_state.get("frozen_messages", [])
                     intervention_data = {
@@ -597,10 +602,13 @@ def render_messages() -> None:
                             if not st.session_state.get("is_generating", False):
                                 logger.debug("render_messages: stale streaming_done, skipping")
                             else:
-                                # Check if cursor loop — don't finalize to latest.content
+                                # Check if cursor loop — don't finalize to latest.content (P0-2)
                                 intervention_state = st.session_state.get("streaming_intervention")
                                 if intervention_state and intervention_state.get("_cursor_loop"):
-                                    handle_cursor_loop_preview(event.get("content", ""))
+                                    handle_cursor_loop_preview(
+                                        event.get("content", ""),
+                                        stream_key=event.get("streamKey", ""),
+                                    )
                                     st.session_state.pop(f"editor-{message.id}", None)
                                     st.rerun()
                                 else:
@@ -622,7 +630,11 @@ def render_messages() -> None:
                             else:
                                 intervention_state = st.session_state.get("streaming_intervention")
                                 if intervention_state and intervention_state.get("_cursor_loop"):
-                                    handle_cursor_loop_preview(event.get("content", ""))
+                                    handle_cursor_loop_error(
+                                        event.get("message", "Unknown streaming error"),
+                                        content=event.get("content", ""),
+                                        stream_key=event.get("streamKey", ""),
+                                    )
                                     st.rerun()
                                 else:
                                     handle_streaming_error(event)
@@ -1045,7 +1057,11 @@ def undo_last_intervention() -> None:
 
 
 def handle_cursor_loop_position(message_id: str, selection_start: int) -> None:
-    """Start a cursor loop preview stream from the given position."""
+    """Start a cursor loop preview stream from the given position.
+
+    This is preview-only: latest.content is NOT modified.
+    The preview is stored separately in cursor_loop['preview_content'].
+    """
     messages: list[ChatMessage] = st.session_state["messages"]
     if not messages:
         return
@@ -1064,13 +1080,31 @@ def handle_cursor_loop_position(message_id: str, selection_start: int) -> None:
     prefix = original_content[:selection_start]
     frozen = frozen_messages_before_latest(messages)
 
+    stream_key = f"{message_id}:intervention:{selection_start}::regenerate_from_here"
+
+    # P0-6: abort old cursor loop stream if running
+    old_intervention = st.session_state.get("streaming_intervention")
+    if old_intervention and old_intervention.get("_cursor_loop"):
+        old_stream_id = old_intervention.get("stream_id", "")
+        if old_stream_id:
+            try:
+                import urllib.request
+                abort_body = f'{{"streamId":"{old_stream_id}"}}'.encode()
+                req = urllib.request.Request(f"{_STREAMING_URL}/api/abort", data=abort_body, method="POST")
+                req.add_header("Content-Type", "application/json")
+                urllib.request.urlopen(req, timeout=2)
+            except Exception:
+                logger.debug("handle_cursor_loop_position: abort old stream failed", exc_info=True)
+
+    # Save preview state — do NOT touch latest.content or latest.status (P0-2)
     st.session_state["cursor_loop"]["original_content"] = original_content
+    st.session_state["cursor_loop"]["base_content"] = prefix
     st.session_state["cursor_loop"]["cursor_pos"] = selection_start
     st.session_state["cursor_loop"]["status"] = "streaming"
-    st.session_state["cursor_loop"]["preview_content"] = ""
+    st.session_state["cursor_loop"]["preview_content"] = prefix
+    st.session_state["cursor_loop"]["stream_key"] = stream_key
+    st.session_state["cursor_loop"]["error"] = None
 
-    latest.content = prefix
-    latest.status = "streaming"
     set_error(st.session_state, None)
     set_generating(st.session_state, True)
 
@@ -1085,33 +1119,56 @@ def handle_cursor_loop_position(message_id: str, selection_start: int) -> None:
         "frozen_messages": frozen,
         "assistant_prefix": prefix,
         "_cursor_loop": True,
+        "_stream_key": stream_key,
     }
     st.session_state["kw_filter"]["retry_count"] = 0
     st.session_state["validator"]["error"] = None
 
 
-def handle_cursor_loop_preview(content: str) -> None:
-    """Store cursor loop preview and restore original content."""
-    messages: list[ChatMessage] = st.session_state["messages"]
-    cl = st.session_state["cursor_loop"]
-    cpl_event = st.session_state.get("cpl_event")
-    if cpl_event:
-        st.session_state.pop("cpl_event", None)
+def handle_cursor_loop_preview(content: str, stream_key: str = "") -> None:
+    """Store cursor loop preview and mark complete.
 
-    if not messages or messages[-1].role != "assistant":
+    preview-only: latest.content is NOT modified.
+    The completed preview content is stored in cursor_loop['preview_content'].
+    """
+    cl = st.session_state["cursor_loop"]
+
+    # P0-5: stale guard — ignore if stream_key doesn't match
+    if stream_key and cl.get("stream_key") and stream_key != cl.get("stream_key"):
+        logger.debug("handle_cursor_loop_preview: stale event ignored (stream_key mismatch)")
         return
 
-    latest = messages[-1]
-    # Restore original content (preview is stored separately)
-    original = cl.get("original_content", "")
-    if original:
-        latest.content = original
-    latest.status = "complete"
+    if not st.session_state.get("is_generating", False):
+        logger.debug("handle_cursor_loop_preview: stale event ignored (not generating)")
+        return
+
+    # preview-only: do NOT touch latest.content or latest.status (P0-2)
     set_generating(st.session_state, False)
     st.session_state["streaming_intervention"] = None
 
     cl["preview_content"] = content
     cl["status"] = "complete"
+    cl["error"] = None
+
+
+def handle_cursor_loop_error(message: str, content: str = "", stream_key: str = "") -> None:
+    """Handle cursor loop streaming error.
+
+    Sets status="error" so the apply button is not shown.
+    Never treats error as complete (P0-4). Never modifies latest.content.
+    """
+    cl = st.session_state["cursor_loop"]
+
+    # P0-5: stale guard
+    if stream_key and cl.get("stream_key") and stream_key != cl.get("stream_key"):
+        logger.debug("handle_cursor_loop_error: stale event ignored (stream_key mismatch)")
+        return
+
+    cl["status"] = "error"
+    cl["error"] = message
+    cl["preview_content"] = content if content else cl.get("preview_content", "")
+    set_generating(st.session_state, False)
+    st.session_state["streaming_intervention"] = None
 
 
 def _apply_cursor_loop() -> None:
@@ -1134,9 +1191,12 @@ def _apply_cursor_loop() -> None:
     )
     cl["enabled"] = False
     cl["original_content"] = ""
+    cl["base_content"] = ""
     cl["preview_content"] = ""
     cl["cursor_pos"] = None
     cl["status"] = "idle"
+    cl["error"] = None
+    cl["stream_key"] = None
 
 
 def _cancel_cursor_loop() -> None:
@@ -1154,6 +1214,9 @@ def _cancel_cursor_loop() -> None:
     cl["preview_content"] = ""
     cl["cursor_pos"] = None
     cl["status"] = "idle"
+    cl["error"] = None
+    cl["stream_key"] = None
+    cl["base_content"] = ""
 
 
 def _thinking_badge() -> None:

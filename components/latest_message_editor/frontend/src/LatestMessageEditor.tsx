@@ -5,6 +5,7 @@ type StreamingDoneEvent = {
   type: "streaming_done"
   content: string
   messageId: string
+  streamKey?: string
 }
 
 type StreamingErrorEvent = {
@@ -12,6 +13,7 @@ type StreamingErrorEvent = {
   message: string
   content: string
   messageId: string
+  streamKey?: string
 }
 
 type LatestMessageEditorArgs = {
@@ -183,6 +185,7 @@ function LatestMessageEditor(props: ComponentProps) {
               message: "Stream ended unexpectedly",
               content: finalContent,
               messageId,
+              streamKey: thisStreamKey,
             }
             Streamlit.setComponentValue(errorEvent)
           }
@@ -216,7 +219,7 @@ function LatestMessageEditor(props: ComponentProps) {
                 const finalContent = parsed.fullContent ?? accumulatedRef.current
                 accumulatedRef.current = finalContent
                 setDisplayContent(finalContent)
-                console.log("[BranchWriter] streaming done:", { contentLen: finalContent.length })
+                console.log("[BranchWriter] streaming done:", { contentLen: finalContent.length, streamKey: thisStreamKey })
                 // Clear any recorded failure — this stream succeeded
                 failedStreamKeyRef.current = ""
                 if (!doneSentRef.current && finalContent.length > 0) {
@@ -225,6 +228,7 @@ function LatestMessageEditor(props: ComponentProps) {
                     type: "streaming_done",
                     content: finalContent,
                     messageId,
+                    streamKey: thisStreamKey,
                   }
                   Streamlit.setComponentValue(doneEvent)
                 }
@@ -243,6 +247,7 @@ function LatestMessageEditor(props: ComponentProps) {
                     message: parsed.message ?? "Unknown stream error",
                     content: finalContent,
                     messageId,
+                    streamKey: thisStreamKey,
                   }
                   Streamlit.setComponentValue(errorEvent)
                 }
@@ -276,6 +281,7 @@ function LatestMessageEditor(props: ComponentProps) {
             message: `Fetch error: ${(err as Error).message}`,
             content: finalContent,
             messageId,
+            streamKey: thisStreamKey,
           }
           Streamlit.setComponentValue(errorEvent)
         }

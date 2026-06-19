@@ -68,17 +68,23 @@ def initialize_state(state: MutableMapping[str, Any]) -> None:
         "enabled": False,
         "message_id": None,
         "original_content": "",
+        "base_content": "",
         "cursor_pos": None,
         "preview_content": "",
         "status": "idle",
+        "stream_key": None,
+        "error": None,
     })
     cl = state["cursor_loop"]
     cl.setdefault("enabled", False)
     cl.setdefault("message_id", None)
     cl.setdefault("original_content", "")
+    cl.setdefault("base_content", "")
     cl.setdefault("cursor_pos", None)
     cl.setdefault("preview_content", "")
     cl.setdefault("status", "idle")
+    cl.setdefault("stream_key", None)
+    cl.setdefault("error", None)
 
     state.setdefault("kw_filter", {
         "enabled": True,
