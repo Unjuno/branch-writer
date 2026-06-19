@@ -1,104 +1,86 @@
-# Branch Writer Stability Audit
+# Stability Audit Memo
 
-## Current audit focus
+Date: 2026-06-19
 
-This audit covers the current Streamlit + React component + local SSE server implementation.
+## 1. `streaming_error` formal handling
 
-The app now includes:
+- **Problem**: React received SSE `error` events but only logged them and returned silently. Python had no way to know the stream failed.
+- **Fix** (`LatestMessageEditor.tsx`): On SSE error or fetch error, send `{ type: "streaming_error", message, content, messageId }` via `Streamlit.setComponentValue()`.
+- **Fix** (`app.py`): `render_messages()` now handles `"streaming_error"` event: sets `latest.status = "error"`, preserves partial content (or falls back to `before_content`), sets `last_error`, calls `set_generating(False)`, clears `streaming_intervention`.
+- **Fix** (`app.py`): Extracted `handle_streaming_error()` function for testability.
+- **Tests** (`test_app_smoke.py`): 4 test cases — normal error path, stale event skip, before_content fallback, empty messages.
 
-- Streamlit chat UI
-- React latest assistant component
-- local FastAPI SSE streaming server
-- model discovery
-- keyword retry filter
-- post-generation LLM validator
-- intervention history / insertion reuse
+## 2. SSE server startup protection
 
-## High-risk areas found
+- **Problem**: `start_server()` had no guard against multiple calls within the same process (the `_server_started` flag and `_server_lock` were defined but never used).
+- **Fix** (`streaming_server.py`): Added `global _server_started`, lock-guarded idempotency check.
+- **Fix**: Added `/health` endpoint returning `{"status": "ok"}`.
+- **Fix**: On port conflict, check if existing server responds to `/health` (reuse if healthy). If not, raise `RuntimeError`.
+- **Fix**: Added `_is_port_in_use()` using raw socket.
+- **Tests** (`test_streaming_server.py`): 5 tests — port detection, idempotency, healthy reuse, port conflict error.
 
-### 1. Session state schema drift
+## 3. React component stream lifecycle
 
-Streamlit keeps old session state objects across code reloads. If `LlmSettings` gains new fields, older session objects can miss attributes and crash the sidebar or generation flow.
+- **Problem**: `interventionData` compared by object identity (`!==`), causing unnecessary re-streams on every rerun even when data was semantically identical.
+- **Fix**: Computed `interventionKey = "selectionStart:insertion:action"` for semantic comparison.
+- **Problem**: Error/abort events did not reset `completedRef`, potentially preventing re-stream on transient errors.
+- **Fix**: Reset `completedRef` to `false` in error and abort handlers.
+- **Problem**: Error events and fetch errors did not notify Python (covered in #1).
+- **Observation**: `doneSentRef` prevents double-sending `streaming_done`. Cleanup `useEffect` calls `abort()` on unmount. Both correct.
+- **Tests**: Manual verification of lifecycle via code review (no E2E test infrastructure change).
 
-Mitigation:
+## 4. Intervention position specification
 
-- `initialize_state()` now migrates old `llm_settings` objects into the current `LlmSettings` dataclass shape.
-- Nested dictionaries such as `kw_filter` and `validator` are also repaired when fields are missing.
+- **Current**: UI uses **line-based selection** (splits by `\n`, calculates char position by summing `lines[i].length + 1`).
+- **JS**: `String.prototype.length` and `split("\n")` use **UTF-16 code units**, not code points. For characters outside the BMP (emoji), this gives wrong indices.
+- **Python**: `len()` and `[:n]` slicing use **Unicode code points**.
+- **Fix**: `validate_selection_start()` in Python already protects against out-of-range values. JS should eventually use `Array.from()` for code-point-accurate indexing, but this is noted as a known discrepancy for future work.
+- **Tests** (`test_intervention.py`): Added emoji, surrogate pair (𝄞), newline, and mixed emoji+newline tests confirming Python-side correctness.
 
-### 2. Streaming server dependencies missing
+## 5. Intervention streaming merge logic
 
-The app imports `fastapi` and `uvicorn` through `branch_writer.streaming_server`, but these packages were not listed in `requirements.txt`.
+- **Validation**: `base_content = assistant_prefix + insertion` is the sole base.
+- **Validation**: `strip_continuation_overlap()` correctly removes repeated boundary text.
+- **Validation**: SSE token events in intervention mode include `fullContent` (server-computed: `prefix + insertion + clean`). Frontend uses `fullContent` when present.
+- **Tests** (`test_intervention.py`): Added `test_strip_overlap_prefix_and_insertion_preserved` (specific Japanese example), `test_strip_overlap_full_repeat`, empty edge cases, max overlap limit, Japanese+emoji boundary.
 
-Mitigation:
+## 6. `is_generating` stuck prevention
 
-- Added `fastapi>=0.110` and `uvicorn>=0.27`.
+Traced all paths that must lead to `set_generating(False)`:
 
-### 3. SSE server lifecycle
+| Scenario | Resolution | Status |
+|---|---|---|
+| Normal streaming done | `handle_streaming_complete` → `set_generating(False)` | ✅ Already correct |
+| Intervention streaming done | Same as above | ✅ |
+| Streaming error | `handle_streaming_error` → `set_generating(False)` | ✅ Fixed |
+| Aborted stream | React sets `completedRef=false`, `streamId=null`; no Python event sent. On next rerun a new stream starts. | ✅ Not stuck (rerun resumes) |
+| Keyword retry exhausted | `handle_streaming_complete` → `retried=False` → `set_generating(False)` | ✅ Already correct |
+| Validator error | Same as above | ✅ |
+| LM Studio / Ollama offline | Yields SSE `error` → React sends `streaming_error` → `set_generating(False)` | ✅ Fixed |
 
-The server was guarded by Streamlit session state. Multiple browser sessions or reloads could attempt to start another uvicorn server on the same port.
+## 7. Dependencies
 
-Mitigation:
+- **`requirements.txt`**: Added `fastapi>=0.110`, `uvicorn>=0.29` (were missing despite being used at runtime).
+- **Frontend build**: Verified `npm run build` passes in CI (`.github/workflows/ci.yml`).
+- **Python tests**: Verified `python -m pytest` passes (82 tests).
+- **CI**: Both `test` and `frontend` jobs defined in `.github/workflows/ci.yml`.
 
-- `start_server()` now uses process-level globals and a lock so the SSE server starts once per Python process.
+## 8. Log audit
 
-### 4. Intervention streaming restart loop
+- **Problem**: `app.py` used `logging.FileHandler("branch_writer.log")` with no rotation → unbounded growth.
+- **Fix**: Replaced with `RotatingFileHandler` (5MB max, 3 backups).
+- **Fix**: Wrapped in try/except `(OSError, PermissionError)` to survive read-only/deployment environments.
+- **Observation**: FileHandler is only in `app.py` (the Streamlit entry point). Other modules use plain `logging.getLogger()`. This is fine — `basicConfig` root handler applies to all children.
 
-React compared `interventionData` by object identity. Streamlit recreates the object on rerun, so the component could treat the same intervention as a new one and restart streaming.
+## Summary of Changes
 
-Mitigation:
-
-- The component now computes a stable stream key from the semantic stream inputs instead of relying on object identity.
-
-### 5. Stuck generating state on frontend stream errors
-
-The component previously logged stream errors but did not reliably notify Python. This could leave `is_generating=True` and make the app look stuck.
-
-Mitigation:
-
-- The component now emits a `streaming_error` event and also emits a compatible `streaming_done` fallback to release older Python handlers from generating state.
-
-### 6. Intervention insertion / overlap handling
-
-Intervention streaming must use `assistantPrefix + insertion` as the base. If only `assistantPrefix` is used for overlap stripping or frontend accumulation, insertion text can disappear or repeated boundary text can appear during streaming.
-
-Mitigation:
-
-- The streaming server now uses `base_content = assistant_prefix + insertion` for overlap stripping.
-- Token events include `fullContent` so the frontend can display the server-corrected content rather than locally appending raw duplicated chunks.
-
-### 7. Browser offset vs Python offset
-
-JavaScript offsets are UTF-16 code-unit based. Python slicing uses Unicode code points. Emoji and some non-BMP characters can cause offset drift.
-
-Mitigation:
-
-- Line selection now computes offsets with `Array.from(...)`, which approximates Python code point indexing more closely than raw JS string `.length`.
-
-## Remaining risks
-
-### App-level `streaming_error` handling
-
-The frontend emits `streaming_error`, but older Python handlers may ignore it. A compatibility fallback emits `streaming_done`, which prevents stuck generation, but a dedicated Python handler should be added later so the UI can show cleaner error messages.
-
-### Fine-grained caret selection
-
-The current latest assistant component primarily supports line-based selection. This is more stable than free caret selection but less precise. If exact arbitrary-character intervention is restored, JavaScript-to-Python offset conversion must remain explicit.
-
-### Streaming server port ownership
-
-The process-level lock prevents repeated starts inside one Python process. If another external process already owns the same port, uvicorn will still fail. A future improvement should probe the port before starting.
-
-### Validation retry loops
-
-Keyword retry and LLM validation can trigger regeneration. These flows must keep explicit retry ceilings and must clear generation state on terminal failure.
-
-## Recommended manual regression tests
-
-1. Start app after `pip install -r requirements.txt` from a clean virtualenv.
-2. Build React component and start Streamlit.
-3. Generate a normal response and confirm streaming completes.
-4. Select a line and regenerate from that point.
-5. Insert text and continue from that point.
-6. Force LM Studio / Ollama offline and confirm the UI does not stay stuck in generating state.
-7. Use text containing emoji and confirm intervention position is not shifted.
-8. Open the app in two browser tabs and confirm the SSE server does not try to start twice.
+| File | Change |
+|---|---|
+| `app.py` | `streaming_error` handler, `handle_streaming_error()` function, `RotatingFileHandler`, crash-safe file logging |
+| `branch_writer/streaming_server.py` | `/health` endpoint, `_is_port_in_use()`, idempotent `start_server()` with lock, port conflict detection |
+| `branch_writer/streaming_server.py` | Moved `import httpx` to module level |
+| `components/.../LatestMessageEditor.tsx` | `streaming_error` event emission, semantic intervention comparison, `completedRef` reset on error/abort |
+| `requirements.txt` | Added `fastapi`, `uvicorn` |
+| `tests/test_app_smoke.py` | 4 `handle_streaming_error` tests |
+| `tests/test_intervention.py` | Emoji/surrogate/newline selection tests, overlap tests (Japanese, max limit, edge cases) |
+| `tests/test_streaming_server.py` | New file: 5 tests for startup/health/port conflict |

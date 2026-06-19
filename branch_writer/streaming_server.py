@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import threading
 from collections.abc import Generator
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from branch_writer.config import LlmSettings, default_llm_settings
+from branch_writer.config import LlmSettings
 from branch_writer.intervention import strip_continuation_overlap
 from branch_writer.llm import LlmError, _iter_chat_completion_chunks
 from branch_writer.messages import ChatMessage, to_openai_messages
@@ -29,9 +31,19 @@ app.add_middleware(
 )
 
 _active_streams: dict[str, threading.Event] = {}
-_server_lock = threading.Lock()
+_active_streams_lock = threading.Lock()
 _server_started = False
-_server_port: int | None = None
+_server_lock = threading.Lock()
+
+
+@app.get("/health")
+async def health_endpoint() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+def _is_port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
 
 def _sse_event(event: str, data: Any) -> str:
@@ -39,25 +51,19 @@ def _sse_event(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
-def _settings_from_payload(settings_data: dict[str, Any]) -> LlmSettings:
-    defaults = default_llm_settings()
-    values: dict[str, Any] = {}
-    for name in LlmSettings.__dataclass_fields__:
-        values[name] = settings_data.get(name, getattr(defaults, name))
-    return LlmSettings(**values)
+def _register_stream(stream_id: str, event: threading.Event) -> None:
+    with _active_streams_lock:
+        _active_streams[stream_id] = event
 
 
-def _messages_from_payload(messages_data: list[dict[str, Any]]) -> list[ChatMessage]:
-    messages: list[ChatMessage] = []
-    for item in messages_data:
-        try:
-            messages.append(ChatMessage(**item))
-        except TypeError:
-            role = item.get("role")
-            content = item.get("content", "")
-            if role in {"user", "assistant"}:
-                messages.append(ChatMessage(role=role, content=content))
-    return messages
+def _unregister_stream(stream_id: str) -> None:
+    with _active_streams_lock:
+        _active_streams.pop(stream_id, None)
+
+
+def _get_abort_event(stream_id: str) -> threading.Event | None:
+    with _active_streams_lock:
+        return _active_streams.get(stream_id)
 
 
 def _stream_normal(
@@ -82,14 +88,14 @@ def _stream_normal(
                     yield _sse_event("aborted", {"streamId": stream_id})
                     return
                 full_content += char
-                yield _sse_event("token", {"text": char, "streamId": stream_id, "fullContent": full_content})
+                yield _sse_event("token", {"text": char, "streamId": stream_id})
         logger.info("_stream_normal: done, streamId=%s, %d chars", stream_id, len(full_content))
         yield _sse_event("done", {"streamId": stream_id, "fullContent": full_content})
     except LlmError as exc:
         logger.error("_stream_normal: LlmError streamId=%s: %s", stream_id, exc)
         yield _sse_event("error", {"message": str(exc), "streamId": stream_id})
     except Exception as exc:
-        logger.exception("_stream_normal: Unexpected error streamId=%s", stream_id)
+        logger.error("_stream_normal: Unexpected error streamId=%s: %s", stream_id, exc)
         yield _sse_event("error", {"message": f"Unexpected error: {exc}", "streamId": stream_id})
     finally:
         _active_streams.pop(stream_id, None)
@@ -109,14 +115,12 @@ def _stream_intervention(
     logger.info("_stream_intervention: streamId=%s, action=%s, selectionStart=%d, prefix=%d chars",
                 stream_id, action, selection_start, len(assistant_prefix))
     abort = _active_streams.get(stream_id)
-    base_content = assistant_prefix + insertion
     raw_continuation = ""
-    previous_full_content = base_content
     try:
         for chunk in _iter_chat_completion_chunks(
             api_messages=[
                 *to_openai_messages(frozen_messages, system_prompt=settings.system_prompt),
-                {"role": "assistant", "content": base_content},
+                {"role": "assistant", "content": assistant_prefix + insertion},
             ],
             settings=settings,
         ):
@@ -124,13 +128,9 @@ def _stream_intervention(
                 yield _sse_event("aborted", {"streamId": stream_id})
                 return
             raw_continuation += chunk
-            clean = strip_continuation_overlap(base_content, raw_continuation)
-            full_content = base_content + clean
-            delta = full_content[len(previous_full_content):]
-            previous_full_content = full_content
-            if not delta:
-                continue
-            for char in delta:
+            clean = strip_continuation_overlap(assistant_prefix, raw_continuation)
+            full_content = assistant_prefix + insertion + clean
+            for char in clean:
                 if abort and abort.is_set():
                     yield _sse_event("aborted", {"streamId": stream_id})
                     return
@@ -145,8 +145,8 @@ def _stream_intervention(
                         "insertion": insertion,
                     },
                 )
-        clean = strip_continuation_overlap(base_content, raw_continuation)
-        full_content = base_content + clean
+        clean = strip_continuation_overlap(assistant_prefix, raw_continuation)
+        full_content = assistant_prefix + insertion + clean
         logger.info("_stream_intervention: done, streamId=%s, %d chars", stream_id, len(full_content))
         yield _sse_event(
             "done",
@@ -162,7 +162,7 @@ def _stream_intervention(
         logger.error("_stream_intervention: LlmError streamId=%s: %s", stream_id, exc)
         yield _sse_event("error", {"message": str(exc), "streamId": stream_id})
     except Exception as exc:
-        logger.exception("_stream_intervention: Unexpected error streamId=%s", stream_id)
+        logger.error("_stream_intervention: Unexpected error streamId=%s: %s", stream_id, exc)
         yield _sse_event("error", {"message": f"Unexpected error: {exc}", "streamId": stream_id})
     finally:
         _active_streams.pop(stream_id, None)
@@ -179,19 +179,15 @@ async def stream_endpoint(request: Request) -> StreamingResponse:
 
     logger.info("stream_endpoint: streamId=%s, mode=%s, model=%s", stream_id, mode, settings_data.get("model"))
 
-    settings = _settings_from_payload(settings_data)
-    messages = _messages_from_payload(messages_data)
+    settings = LlmSettings(**settings_data)
+    messages = [ChatMessage(**m) for m in messages_data]
 
     abort_event = threading.Event()
-    if stream_id:
-        previous = _active_streams.get(stream_id)
-        if previous:
-            previous.set()
-        _active_streams[stream_id] = abort_event
+    _active_streams[stream_id] = abort_event
 
     if mode == "intervention":
         frozen_data = body.get("frozenMessages", [])
-        frozen_messages = _messages_from_payload(frozen_data)
+        frozen_messages = [ChatMessage(**m) for m in frozen_data]
         generator = _stream_intervention(
             frozen_messages=frozen_messages,
             assistant_prefix=body.get("assistantPrefix", ""),
@@ -233,24 +229,42 @@ async def abort_endpoint(request: Request) -> dict[str, str]:
 
 
 def start_server(port: int = 8765) -> None:
-    """Start the FastAPI server once per Python process."""
+    """Start the FastAPI server in a background thread (idempotent, once per process)."""
+    global _server_started
     import uvicorn
 
-    global _server_started, _server_port
     with _server_lock:
         if _server_started:
-            logger.info("start_server: already started on port %s", _server_port)
+            logger.info("start_server: already started, skipping")
             return
-        _server_started = True
-        _server_port = port
+        if _is_port_in_use(port):
+            # Port already in use by another process — check if it's our server
+            try:
+                resp = httpx.get(f"http://127.0.0.1:{port}/health", timeout=2)
+                if resp.status_code == 200:
+                    logger.info("start_server: server already running on port %d, reusing", port)
+                    _server_started = True
+                    return
+            except Exception:
+                pass
+            logger.error(
+                "start_server: Port %d is already in use by another process. "
+                "Please free the port or change _STREAMING_PORT in app.py.",
+                port,
+            )
+            raise RuntimeError(
+                f"Port {port} is already in use by another process. "
+                f"Please free the port or change _STREAMING_PORT in app.py."
+            )
 
-    logger.info("start_server: starting on port %d", port)
+        logger.info("start_server: starting on port %d", port)
+        _server_started = True
 
     def run() -> None:
         try:
             uvicorn.run(app, host="127.0.0.1", port=port, log_level="error")
         except Exception:
-            logger.exception("start_server: uvicorn stopped unexpectedly")
+            logger.exception("start_server: uvicorn failed to start")
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()

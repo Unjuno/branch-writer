@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from typing import Any
 from uuid import uuid4
 
@@ -45,9 +46,18 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("branch_writer.log", encoding="utf-8"),
     ],
 )
+
+# RotatingFileHandler で branch_writer.log の肥大化を防止（最大5MB, 3世代）
+# 読み取り専用環境では失敗しても無視する
+try:
+    _file_handler = RotatingFileHandler("branch_writer.log", encoding="utf-8", maxBytes=5 * 1024 * 1024, backupCount=3)
+    _file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logging.getLogger().addHandler(_file_handler)
+except (OSError, PermissionError):
+    pass
+
 logger = logging.getLogger("branch_writer.app")
 
 _STREAMING_PORT = 8765
@@ -541,6 +551,13 @@ def render_messages() -> None:
                                     intervention_before is not None,
                                 )
                                 st.rerun()
+                    elif event_type == "streaming_error":
+                        logger.error("render_messages: streaming_error: %s", event.get("message"))
+                        if not st.session_state.get("is_generating", False):
+                            logger.debug("render_messages: stale streaming_error, skipping")
+                        else:
+                            handle_streaming_error(event)
+                            st.rerun()
                     elif event_type == "line_selected":
                         st.session_state[f"_selected_line_{message.id}"] = event.get("selectionStart", 0)
         elif message.role == "assistant" and message.status == "streaming":
@@ -740,6 +757,45 @@ def _run_validation_pipeline() -> bool:
         _run_llm_validator(check_text)
 
     return False
+
+
+def handle_streaming_error(event: dict[str, Any]) -> None:
+    """Handle streaming error signal from React component.
+
+    Reverts latest assistant content safely and sets error/generating state.
+    """
+    logger.info("handle_streaming_error: message=%s, is_generating=%s",
+                event.get("message"), st.session_state.get("is_generating"))
+    messages: list[ChatMessage] = st.session_state["messages"]
+
+    if not messages or messages[-1].role != "assistant":
+        set_error(st.session_state, f"Streaming error: {event.get('message', 'Unknown')}")
+        set_generating(st.session_state, False)
+        st.session_state["streaming_intervention"] = None
+        return
+
+    latest = messages[-1]
+
+    # Stale event guard
+    if latest.status != "streaming":
+        logger.debug("handle_streaming_error: skipping stale event (status=%s)", latest.status)
+        return
+
+    error_content = event.get("content", "")
+    if error_content:
+        latest.content = error_content
+    else:
+        # Fall back to content before intervention if available
+        intervention = st.session_state.get("streaming_intervention")
+        if intervention:
+            before = intervention.get("before_content")
+            if before:
+                latest.content = before
+
+    latest.status = "error"
+    set_error(st.session_state, f"Streaming error: {event.get('message', 'Unknown')}")
+    set_generating(st.session_state, False)
+    st.session_state["streaming_intervention"] = None
 
 
 def handle_user_prompt(prompt: str) -> None:
