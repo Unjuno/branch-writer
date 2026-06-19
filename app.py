@@ -473,15 +473,12 @@ def render_messages() -> None:
 
         if is_latest_intervenable and component_available():
             in_intervention = st.session_state.get("streaming_intervention") is not None
-            intervention_state = st.session_state.get("streaming_intervention", {})
-            is_cursor_loop_stream = bool(intervention_state and intervention_state.get("_cursor_loop"))
             generating = bool(st.session_state["is_generating"])
-            disabled = in_intervention and not is_cursor_loop_stream
-            can_intervene = not (in_intervention and not is_cursor_loop_stream)
-            cl = st.session_state["cursor_loop"]
+            disabled = in_intervention
 
             intervention_data = None
             if in_intervention:
+                intervention_state = st.session_state.get("streaming_intervention", {})
                 if intervention_state:
                     frozen = intervention_state.get("frozen_messages", [])
                     intervention_data = {
@@ -498,98 +495,10 @@ def render_messages() -> None:
                         "streamKey": intervention_state.get("stream_key", ""),
                     }
 
-            # インタベンションボタン (can_intervene のときだけ表示)
-            cursor_loop_streaming = cl.get("enabled") and cl.get("status") == "streaming"
-            if can_intervene:
-                cl_enabled = st.checkbox(
-                    "🔁 Cursor Loop",
-                    value=cl.get("enabled", False),
-                    key=f"cl-toggle-{message.id}",
-                    help="行をクリック→preview生成→適用/キャンセル",
-                )
-                if cl_enabled != cl.get("enabled"):
-                    cl["enabled"] = cl_enabled
-                    if not cl_enabled:
-                        _cancel_cursor_loop()
-                    st.rerun()
-
-                has_selection = f"_selected_line_{message.id}" in st.session_state
-                sel = st.session_state.get(f"_selected_line_{message.id}", len(message.content))
-                at_end = sel >= len(message.content)
-
-                if not has_selection:
-                    st.caption("👆 行をクリックして再生性位置を選択してください")
-                else:
-                    st.caption(f"📍 カーソル位置: {sel} / {len(message.content)} 文字目")
-                btn_cols = st.columns([1, 3, 1])
-                with btn_cols[0]:
-                    regen_disabled = (not has_selection or at_end) or cursor_loop_streaming
-                    regen_label = "✂ ここから再生成"
-                    if not has_selection:
-                        regen_label = "位置未選択"
-                    elif at_end:
-                        regen_label = "末尾は再生成できません"
-                    elif cursor_loop_streaming:
-                        regen_label = "Cursor Loop生成中"
-                    if st.button(regen_label, key=f"regen-{message.id}", disabled=regen_disabled):
-                        event = {
-                            "requestId": f"{message.id}:regenerate:{__import__('time').time()}",
-                            "action": "regenerate_from_here",
-                            "messageId": message.id,
-                            "selectionStart": sel,
-                            "selectionEnd": sel,
-                        }
-                        st.session_state["_intervention_event"] = event
-                        st.rerun()
-                with btn_cols[1]:
-                    insertion = st.text_input(
-                        "挿入テキスト",
-                        value="",
-                        placeholder="ここにテキストを入力...",
-                        key=f"insert-input-{message.id}",
-                        label_visibility="collapsed",
-                        disabled=(not has_selection) or cursor_loop_streaming,
-                    )
-                with btn_cols[2]:
-                    if insertion.strip():
-                        if st.button("挿入して続ける", key=f"insert-{message.id}", disabled=cursor_loop_streaming):
-                            event = {
-                                "requestId": f"{message.id}:insert:{__import__('time').time()}",
-                                "action": "insert_and_continue",
-                                "messageId": message.id,
-                                "selectionStart": sel,
-                                "selectionEnd": sel,
-                                "insertion": insertion,
-                            }
-                            st.session_state["_intervention_event"] = event
-                            st.rerun()
-
-                # Cursor Loop apply/cancel/status (can_intervene のときだけ表示)
-                if cl["enabled"] and cl["status"] == "complete" and cl["preview_content"]:
-                    st.caption(f"🔍 Cursor Loop — {len(cl['preview_content'])} chars preview ready")
-                    col_a, col_c = st.columns([1, 1])
-                    with col_a:
-                        if st.button("✅ 適用", key=f"cl-apply-{message.id}"):
-                            _apply_cursor_loop()
-                            st.rerun()
-                    with col_c:
-                        if st.button("✖ キャンセル", key=f"cl-cancel-{message.id}"):
-                            _cancel_cursor_loop()
-                            st.rerun()
-                elif cl["enabled"] and cl["status"] == "streaming":
-                    col_cancel = st.columns([1])
-                    with col_cancel[0]:
-                        if st.button("⏹ Cursor Loop停止", key=f"cl-stop-{message.id}"):
-                            _cancel_cursor_loop()
-                            st.rerun()
-                elif cl["enabled"] and cl["status"] == "error":
-                    st.caption("⚠️ Cursor Loop — 生成エラー")
-
-            # Componentは常に描画 (P0-1: is_latest_intervenable なら常に)
+            # Componentは常に描画
             with st.chat_message("assistant"):
                 logger.info("render_messages: editor msg=%s, streaming=%s, has_intervention=%s",
                             message.id, generating, intervention_data is not None)
-                preview_content = cl.get("preview_content", "") if cl.get("enabled") else ""
                 event = latest_message_editor(
                     message_id=message.id,
                     content=message.content,
@@ -597,8 +506,8 @@ def render_messages() -> None:
                     streaming_url=_STREAMING_URL,
                     is_streaming=generating,
                     intervention_data=intervention_data,
-                    cursor_loop_enabled=bool(cl.get("enabled")),
-                    preview_content=preview_content,
+                    cursor_loop_enabled=False,
+                    preview_content="",
                     messages_for_stream=messages_for_stream,
                     llm_settings=llm_settings_dict,
                     key=f"editor-{message.id}",
@@ -645,11 +554,19 @@ def render_messages() -> None:
                             else:
                                 handle_streaming_error(event)
                                 st.rerun()
-                    elif event_type == "line_selected":
-                        sel = event.get("selectionStart", 0)
-                        st.session_state[f"_selected_line_{message.id}"] = sel
-                        if cl.get("enabled"):
-                            handle_cursor_loop_position(message.id, sel)
+                    elif event_type == "inline_continue":
+                        if not generating:
+                            sel = int(event.get("selectionStart", 0))
+                            insertion = str(event.get("insertion", ""))
+                            action = "insert_and_continue" if insertion else "regenerate_from_here"
+                            st.session_state["_intervention_event"] = {
+                                "requestId": event.get("requestId") or f"{message.id}:inline:{sel}:{__import__('time').time()}",
+                                "action": action,
+                                "messageId": message.id,
+                                "selectionStart": sel,
+                                "selectionEnd": sel,
+                                "insertion": insertion,
+                            }
                             st.rerun()
         elif message.role == "assistant" and message.status == "streaming":
             with st.chat_message("assistant"):

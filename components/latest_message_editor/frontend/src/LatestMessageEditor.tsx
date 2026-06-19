@@ -77,8 +77,6 @@ function LatestMessageEditor(props: ComponentProps) {
   const streamingUrl = args.streamingUrl ?? ""
   const isStreaming = Boolean(args.isStreaming)
   const interventionData = args.interventionData ?? null
-  const cursorLoopEnabled = Boolean(args.cursorLoopEnabled)
-  const previewContent = args.previewContent ?? ""
   const messagesForStream = args.messagesForStream ?? []
   const llmSettings = args.llmSettings ?? null
 
@@ -86,12 +84,16 @@ function LatestMessageEditor(props: ComponentProps) {
   const [displayContent, setDisplayContent] = useState(initialContent)
   const [streamId, setStreamId] = useState<string | null>(null)
   const [hoveredLine, setHoveredLine] = useState<number | null>(null)
+  const [selectedLine, setSelectedLine] = useState<number | null>(null)
+  const [draftInsertion, setDraftInsertion] = useState("")
   const abortControllerRef = useRef<AbortController | null>(null)
   const accumulatedRef = useRef("")
   const doneSentRef = useRef(false)
   const completedRef = useRef(false)
   const failedStreamKeyRef = useRef("")
   const streamModeRef = useRef("normal")
+  const isComposingRef = useRef(false)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   const isActivelyStreaming = isStreaming && streamId !== null
 
@@ -104,18 +106,13 @@ function LatestMessageEditor(props: ComponentProps) {
 
   useEffect(() => {
     Streamlit.setFrameHeight()
-  }, [textWithCursor, hoveredLine])
-
-  // When cursor loop has a completed preview, show it (overrides initialContent)
-  const hasPreview = cursorLoopEnabled && previewContent && !isActivelyStreaming
+  }, [textWithCursor, hoveredLine, selectedLine])
 
   useEffect(() => {
-    if (hasPreview) {
-      setDisplayContent(previewContent)
-    } else if (!isActivelyStreaming) {
+    if (!isActivelyStreaming) {
       setDisplayContent(initialContent)
     }
-  }, [initialContent, isActivelyStreaming, hasPreview, previewContent])
+  }, [initialContent, isActivelyStreaming])
 
   const getInterventionBase = (p: Record<string, unknown>): string => {
     if (typeof p.baseContent === "string") return p.baseContent
@@ -136,9 +133,8 @@ function LatestMessageEditor(props: ComponentProps) {
     const thisStreamKey = (extraParams.streamKey as string) || `${messageId}:${mode}:${extraParams.streamKeySuffix ?? ""}`
     console.log("[BranchWriter] startStreaming:", { mode, streamId: newStreamId, streamKey: thisStreamKey })
     doneSentRef.current = false
-    failedStreamKeyRef.current = "" // clear any previous failure
+    failedStreamKeyRef.current = ""
     setStreamId(newStreamId)
-    // For intervention mode, start from baseContent (prefix + insertion) so tokens append correctly
     accumulatedRef.current = mode === "intervention"
       ? getInterventionBase(extraParams)
       : ""
@@ -175,7 +171,6 @@ function LatestMessageEditor(props: ComponentProps) {
       while (true) {
         const { done, value } = await reader.read()
         if (done) {
-          // Stream ended without an SSE done/error event (e.g. server crash)
           failedStreamKeyRef.current = thisStreamKey
           if (!doneSentRef.current) {
             doneSentRef.current = true
@@ -206,12 +201,9 @@ function LatestMessageEditor(props: ComponentProps) {
               const parsed = JSON.parse(data)
               if (eventType === "token") {
                 if (parsed.fullContent) {
-                  // Intervention mode: use the pre-computed full content
-                  // (includes prefix + insertion + overlap-stripped continuation)
                   accumulatedRef.current = parsed.fullContent
                   setDisplayContent(parsed.fullContent)
                 } else {
-                  // Normal mode: accumulate text char by char
                   accumulatedRef.current += parsed.text
                   setDisplayContent(accumulatedRef.current)
                 }
@@ -220,7 +212,6 @@ function LatestMessageEditor(props: ComponentProps) {
                 accumulatedRef.current = finalContent
                 setDisplayContent(finalContent)
                 console.log("[BranchWriter] streaming done:", { contentLen: finalContent.length, streamKey: thisStreamKey })
-                // Clear any recorded failure — this stream succeeded
                 failedStreamKeyRef.current = ""
                 if (!doneSentRef.current && finalContent.length > 0) {
                   doneSentRef.current = true
@@ -286,7 +277,6 @@ function LatestMessageEditor(props: ComponentProps) {
           Streamlit.setComponentValue(errorEvent)
         }
       } else {
-        // AbortError: stream was intentionally cancelled, not an error
         failedStreamKeyRef.current = thisStreamKey
       }
       if (abortControllerRef.current === controller) {
@@ -309,7 +299,6 @@ function LatestMessageEditor(props: ComponentProps) {
       interventionKeyRef.current = interventionKey
     }
 
-    // When interventionData changes semantically, abort old stream and reset
     if (keyChanged && interventionKey) {
       completedRef.current = false
       failedStreamKeyRef.current = ""
@@ -317,11 +306,9 @@ function LatestMessageEditor(props: ComponentProps) {
       setStreamId(null)
     }
 
-    // Build a key to identify the logical stream (used to prevent re-stream after failure)
     const currentStreamKey = streamKeyFromData || `${messageId}:${streamModeRef.current}:${interventionKey}`
 
     if (isStreaming && !completedRef.current && streamingUrl && !streamId) {
-      // Skip if this same stream already failed (wait for isStreaming=false to clear)
       if (failedStreamKeyRef.current === currentStreamKey) {
         console.log("[BranchWriter] skip re-stream (previous attempt failed):", currentStreamKey)
       } else {
@@ -354,7 +341,6 @@ function LatestMessageEditor(props: ComponentProps) {
     return () => { abortControllerRef.current?.abort() }
   }, [])
 
-  // Abort controller when isStreaming turns false (e.g. stop button in Python)
   useEffect(() => {
     if (!isStreaming && streamId) {
       abortControllerRef.current?.abort()
@@ -362,11 +348,14 @@ function LatestMessageEditor(props: ComponentProps) {
     }
   }, [isStreaming, streamId])
 
-  const selectLine = useCallback((lineIndex: number) => {
-    if (disabled) return
-
-    // Item 2: Cursor Loop中は元Assistant本文基準でselectionStart計算 (previewContent基準にしない)
-    const base = cursorLoopEnabled ? initialContent : displayContent
+  const clickLine = useCallback((lineIndex: number) => {
+    if (disabled || isActivelyStreaming) return
+    if (selectedLine === lineIndex) {
+      setSelectedLine(null)
+      setDraftInsertion("")
+      return
+    }
+    const base = initialContent
     const lines = base.split("\n")
     const codePointCounts = lines.map(l => Array.from(l).length)
     let charPos = 0
@@ -375,61 +364,104 @@ function LatestMessageEditor(props: ComponentProps) {
     }
     const totalCodePoints = Array.from(base).length
     charPos = Math.min(charPos, totalCodePoints)
-
     setSelectionStart(charPos)
-    setHoveredLine(lineIndex)
-  }, [disabled, cursorLoopEnabled, initialContent, displayContent])
+    setSelectedLine(lineIndex)
+    setDraftInsertion("")
+  }, [disabled, isActivelyStreaming, initialContent, selectedLine])
 
-  const confirmSelection = useCallback(() => {
-    if (hoveredLine === null) return
-    console.log("[BranchWriter] confirmSelection:", { selectionStart, hoveredLine })
-    Streamlit.setComponentValue({ type: "line_selected", selectionStart, lineIndex: hoveredLine, messageId })
-  }, [hoveredLine, selectionStart, messageId])
+  useEffect(() => {
+    if (selectedLine !== null && inputRef.current) {
+      inputRef.current.focus()
+    }
+  }, [selectedLine])
 
-  const canPositionCursor = !disabled && !(cursorLoopEnabled && previewContent && !isActivelyStreaming)
+  const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (isComposingRef.current) return
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault()
+      if (selectedLine !== null) {
+        Streamlit.setComponentValue({
+          type: "inline_continue",
+          messageId,
+          selectionStart,
+          insertion: draftInsertion,
+          requestId: `${messageId}:inline:${selectionStart}:${Date.now()}`,
+        })
+      }
+    } else if (e.key === "Escape") {
+      setSelectedLine(null)
+      setDraftInsertion("")
+    }
+  }, [selectedLine, selectionStart, draftInsertion, messageId])
 
+  const canClick = !disabled && !isActivelyStreaming
   const lines = useMemo(() => textWithCursor.split("\n"), [textWithCursor])
 
   return (
     <div style={themeVars(theme)}>
       <div style={{ position: "relative" }}>
         {lines.map((line, i) => {
-          const isHovered = canPositionCursor && hoveredLine === i
+          const isHovered = canClick && hoveredLine === i
+          const isSelected = canClick && selectedLine === i
           return (
             <div
               key={i}
               style={{
                 lineHeight: 1.7,
-                cursor: canPositionCursor ? "pointer" : "default",
-                background: isHovered ? "rgba(255,75,75,0.15)" : "transparent",
-                borderLeft: isHovered ? "3px solid var(--bw-primary)" : "3px solid transparent",
-                paddingLeft: isHovered ? 5 : 8,
+                cursor: canClick ? "pointer" : "default",
+                background: isSelected
+                  ? "rgba(255,75,75,0.12)"
+                  : isHovered
+                    ? "rgba(255,75,75,0.06)"
+                    : "transparent",
+                borderLeft: isSelected
+                  ? "3px solid var(--bw-primary)"
+                  : isHovered
+                    ? "3px solid rgba(255,75,75,0.4)"
+                    : "3px solid transparent",
+                paddingLeft: isSelected || isHovered ? 5 : 8,
                 transition: "background 0.1s, border-color 0.1s",
                 whiteSpace: "pre-wrap",
                 wordWrap: "break-word",
-                borderRadius: isHovered ? "2px 0 0 2px" : 0,
+                borderRadius: isSelected || isHovered ? "2px 0 0 2px" : 0,
                 position: "relative",
               }}
-              onMouseEnter={() => canPositionCursor && selectLine(i)}
-              onClick={() => canPositionCursor && confirmSelection()}
+              onMouseEnter={() => canClick && setHoveredLine(i)}
+              onMouseLeave={() => canClick && setHoveredLine(null)}
+              onClick={() => canClick && clickLine(i)}
             >
-              {isHovered && (
-                <span style={{
-                  position: "absolute",
-                  left: -3,
-                  top: 0,
-                  bottom: 0,
-                  width: 3,
-                  background: "var(--bw-primary)",
-                  borderRadius: "2px 0 0 2px",
-                  boxShadow: "0 0 6px rgba(255,75,75,0.5)",
-                }} />
-              )}
               {line || "\u00a0"}
             </div>
           )
         })}
       </div>
+      {selectedLine !== null && !isActivelyStreaming && (
+        <div style={{ marginTop: 8 }}>
+          <input
+            ref={inputRef}
+            type="text"
+            value={draftInsertion}
+            onChange={e => setDraftInsertion(e.target.value)}
+            onKeyDown={handleInputKeyDown}
+            onCompositionStart={() => { isComposingRef.current = true }}
+            onCompositionEnd={() => { isComposingRef.current = false }}
+            disabled={disabled}
+            placeholder="入力してEnter / 空Enterでここから再生成"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "8px 12px",
+              fontSize: "inherit",
+              fontFamily: "inherit",
+              color: "var(--bw-text)",
+              background: "var(--bw-bg)",
+              border: "1px solid var(--bw-border)",
+              borderRadius: 4,
+              outline: "none",
+            }}
+          />
+        </div>
+      )}
     </div>
   )
 }
