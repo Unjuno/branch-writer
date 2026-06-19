@@ -551,7 +551,7 @@ def render_messages() -> None:
                         disabled=(not has_selection) or cursor_loop_streaming,
                     )
                 with btn_cols[2]:
-                    if insertion.strip():
+                    if insertion.strip() and not cursor_loop_streaming:
                         if st.button("挿入して続ける", key=f"insert-{message.id}"):
                             event = {
                                 "requestId": f"{message.id}:insert:{__import__('time').time()}",
@@ -577,7 +577,11 @@ def render_messages() -> None:
                             _cancel_cursor_loop()
                             st.rerun()
                 elif cl["enabled"] and cl["status"] == "streaming":
-                    st.caption("🔄 Cursor Loop — preview生成中...")
+                    col_cancel = st.columns([1])
+                    with col_cancel[0]:
+                        if st.button("⏹ Cursor Loop停止", key=f"cl-stop-{message.id}"):
+                            _cancel_cursor_loop()
+                            st.rerun()
                 elif cl["enabled"] and cl["status"] == "error":
                     st.caption("⚠️ Cursor Loop — 生成エラー")
 

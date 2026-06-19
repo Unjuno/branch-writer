@@ -378,7 +378,7 @@ function LatestMessageEditor(props: ComponentProps) {
     Streamlit.setComponentValue({ type: "line_selected", selectionStart, lineIndex: hoveredLine, messageId })
   }, [hoveredLine, selectionStart, messageId])
 
-  const canPositionCursor = !disabled
+  const canPositionCursor = !disabled && !(cursorLoopEnabled && previewContent)
 
   const lines = useMemo(() => textWithCursor.split("\n"), [textWithCursor])
 
