@@ -404,64 +404,65 @@ function LatestMessageEditor(props: ComponentProps) {
           const isHovered = canClick && hoveredLine === i
           const isSelected = canClick && selectedLine === i
           return (
-            <div
-              key={i}
-              style={{
-                lineHeight: 1.7,
-                cursor: canClick ? "pointer" : "default",
-                background: isSelected
-                  ? "rgba(255,75,75,0.12)"
-                  : isHovered
-                    ? "rgba(255,75,75,0.06)"
-                    : "transparent",
-                borderLeft: isSelected
-                  ? "3px solid var(--bw-primary)"
-                  : isHovered
-                    ? "3px solid rgba(255,75,75,0.4)"
-                    : "3px solid transparent",
-                paddingLeft: isSelected || isHovered ? 5 : 8,
-                transition: "background 0.1s, border-color 0.1s",
-                whiteSpace: "pre-wrap",
-                wordWrap: "break-word",
-                borderRadius: isSelected || isHovered ? "2px 0 0 2px" : 0,
-                position: "relative",
-              }}
-              onMouseEnter={() => canClick && setHoveredLine(i)}
-              onMouseLeave={() => canClick && setHoveredLine(null)}
-              onClick={() => canClick && clickLine(i)}
-            >
-              {line || "\u00a0"}
-            </div>
+            <React.Fragment key={i}>
+              <div
+                style={{
+                  lineHeight: 1.7,
+                  cursor: canClick ? "pointer" : "default",
+                  background: isSelected
+                    ? "rgba(255,75,75,0.12)"
+                    : isHovered
+                      ? "rgba(255,75,75,0.06)"
+                      : "transparent",
+                  borderLeft: isSelected
+                    ? "3px solid var(--bw-primary)"
+                    : isHovered
+                      ? "3px solid rgba(255,75,75,0.4)"
+                      : "3px solid transparent",
+                  paddingLeft: isSelected || isHovered ? 5 : 8,
+                  transition: "background 0.1s, border-color 0.1s",
+                  whiteSpace: "pre-wrap",
+                  wordWrap: "break-word",
+                  borderRadius: isSelected || isHovered ? "2px 0 0 2px" : 0,
+                  position: "relative",
+                }}
+                onMouseEnter={() => canClick && setHoveredLine(i)}
+                onMouseLeave={() => canClick && setHoveredLine(null)}
+                onClick={() => canClick && clickLine(i)}
+              >
+                {line || "\u00a0"}
+              </div>
+              {isSelected && !isActivelyStreaming && (
+                <div style={{ margin: "4px 0 8px 0" }}>
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={draftInsertion}
+                    onChange={e => setDraftInsertion(e.target.value)}
+                    onKeyDown={handleInputKeyDown}
+                    onCompositionStart={() => { isComposingRef.current = true }}
+                    onCompositionEnd={() => { isComposingRef.current = false }}
+                    disabled={disabled}
+                    placeholder="入力してEnter / 空Enterでここから再生成"
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: "8px 12px",
+                      fontSize: "inherit",
+                      fontFamily: "inherit",
+                      color: "var(--bw-text)",
+                      background: "var(--bw-bg)",
+                      border: "1px solid var(--bw-border)",
+                      borderRadius: 4,
+                      outline: "none",
+                    }}
+                  />
+                </div>
+              )}
+            </React.Fragment>
           )
         })}
       </div>
-      {selectedLine !== null && !isActivelyStreaming && (
-        <div style={{ marginTop: 8 }}>
-          <input
-            ref={inputRef}
-            type="text"
-            value={draftInsertion}
-            onChange={e => setDraftInsertion(e.target.value)}
-            onKeyDown={handleInputKeyDown}
-            onCompositionStart={() => { isComposingRef.current = true }}
-            onCompositionEnd={() => { isComposingRef.current = false }}
-            disabled={disabled}
-            placeholder="入力してEnter / 空Enterでここから再生成"
-            style={{
-              width: "100%",
-              boxSizing: "border-box",
-              padding: "8px 12px",
-              fontSize: "inherit",
-              fontFamily: "inherit",
-              color: "var(--bw-text)",
-              background: "var(--bw-bg)",
-              border: "1px solid var(--bw-border)",
-              borderRadius: 4,
-              outline: "none",
-            }}
-          />
-        </div>
-      )}
     </div>
   )
 }
