@@ -354,6 +354,14 @@ function LatestMessageEditor(props: ComponentProps) {
     return () => { abortControllerRef.current?.abort() }
   }, [])
 
+  // Abort controller when isStreaming turns false (e.g. stop button in Python)
+  useEffect(() => {
+    if (!isStreaming && streamId) {
+      abortControllerRef.current?.abort()
+      setStreamId(null)
+    }
+  }, [isStreaming, streamId])
+
   const selectLine = useCallback((lineIndex: number) => {
     if (disabled) return
 
@@ -378,7 +386,7 @@ function LatestMessageEditor(props: ComponentProps) {
     Streamlit.setComponentValue({ type: "line_selected", selectionStart, lineIndex: hoveredLine, messageId })
   }, [hoveredLine, selectionStart, messageId])
 
-  const canPositionCursor = !disabled && !(cursorLoopEnabled && previewContent)
+  const canPositionCursor = !disabled && !(cursorLoopEnabled && previewContent && !isActivelyStreaming)
 
   const lines = useMemo(() => textWithCursor.split("\n"), [textWithCursor])
 
