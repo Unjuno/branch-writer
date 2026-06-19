@@ -357,19 +357,20 @@ function LatestMessageEditor(props: ComponentProps) {
   const selectLine = useCallback((lineIndex: number) => {
     if (disabled) return
 
-    // Array.fromでUnicode code point単位の長さを取得 (絵文字などでも正しい位置になる)
-    const lines = displayContent.split("\n")
+    // Item 2: Cursor Loop中は元Assistant本文基準でselectionStart計算 (previewContent基準にしない)
+    const base = cursorLoopEnabled ? initialContent : displayContent
+    const lines = base.split("\n")
     const codePointCounts = lines.map(l => Array.from(l).length)
     let charPos = 0
     for (let i = 0; i < lineIndex && i < lines.length; i++) {
       charPos += codePointCounts[i] + 1
     }
-    const totalCodePoints = Array.from(displayContent).length
+    const totalCodePoints = Array.from(base).length
     charPos = Math.min(charPos, totalCodePoints)
 
     setSelectionStart(charPos)
     setHoveredLine(lineIndex)
-  }, [disabled, isActivelyStreaming, displayContent])
+  }, [disabled, cursorLoopEnabled, initialContent, displayContent])
 
   const confirmSelection = useCallback(() => {
     if (hoveredLine === null) return

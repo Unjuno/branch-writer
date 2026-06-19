@@ -1086,6 +1086,7 @@ def handle_cursor_loop_position(message_id: str, selection_start: int) -> None:
     # P0-6: abort is handled by React's AbortController + stale guard (P1-1: removed dead stream_id code)
 
     # Save preview state — do NOT touch latest.content or latest.status (P0-2)
+    st.session_state["cursor_loop"]["message_id"] = message_id
     st.session_state["cursor_loop"]["original_content"] = original_content
     st.session_state["cursor_loop"]["base_content"] = prefix
     st.session_state["cursor_loop"]["cursor_pos"] = selection_start
@@ -1179,6 +1180,7 @@ def _apply_cursor_loop() -> None:
         action="cursor_loop_apply",
     )
     cl["enabled"] = False
+    cl["message_id"] = None
     cl["original_content"] = ""
     cl["base_content"] = ""
     cl["preview_content"] = ""
@@ -1206,6 +1208,7 @@ def _cancel_cursor_loop() -> None:
     cl["error"] = None
     cl["stream_key"] = None
     cl["base_content"] = ""
+    cl["message_id"] = None
 
 
 def _thinking_badge() -> None:
