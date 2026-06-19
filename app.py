@@ -474,11 +474,11 @@ def render_messages() -> None:
         if is_latest_intervenable and component_available():
             in_intervention = st.session_state.get("streaming_intervention") is not None
             intervention_state = st.session_state.get("streaming_intervention", {})
-            # P0-3: cursor loop should not block cursor movement
             is_cursor_loop_stream = bool(intervention_state and intervention_state.get("_cursor_loop"))
             generating = bool(st.session_state["is_generating"])
             disabled = in_intervention and not is_cursor_loop_stream
             can_intervene = not (in_intervention and not is_cursor_loop_stream)
+            cl = st.session_state["cursor_loop"]
 
             intervention_data = None
             if in_intervention:
@@ -495,11 +495,11 @@ def render_messages() -> None:
                         "action": intervention_state.get("action", "regenerate_from_here"),
                         "beforeContent": intervention_state.get("before_content", ""),
                         "selectionStart": intervention_state.get("selection_start", 0),
+                        "streamKey": intervention_state.get("stream_key", ""),
                     }
 
-            # インタベンションボタンをチャットの上に表示
+            # インタベンションボタン (can_intervene のときだけ表示)
             if can_intervene:
-                cl = st.session_state["cursor_loop"]
                 cl_enabled = st.checkbox(
                     "🔁 Cursor Loop",
                     value=cl.get("enabled", False),
@@ -561,8 +561,7 @@ def render_messages() -> None:
                             st.session_state["_intervention_event"] = event
                             st.rerun()
 
-                # Cursor loop toggle (appears only for latest intervenable message)
-                cl = st.session_state["cursor_loop"]
+                # Cursor Loop apply/cancel/status (can_intervene のときだけ表示)
                 if cl["enabled"] and cl["status"] == "complete" and cl["preview_content"]:
                     st.caption(f"🔍 Cursor Loop — {len(cl['preview_content'])} chars preview ready")
                     col_a, col_c = st.columns([1, 1])
@@ -579,73 +578,72 @@ def render_messages() -> None:
                 elif cl["enabled"] and cl["status"] == "error":
                     st.caption("⚠️ Cursor Loop — 生成エラー")
 
-                with st.chat_message("assistant"):
-                    logger.info("render_messages: editor msg=%s, streaming=%s, has_intervention=%s",
-                                message.id, generating, intervention_data is not None)
-                    preview_content = cl.get("preview_content", "") if cl.get("enabled") else ""
-                    event = latest_message_editor(
-                        message_id=message.id,
-                        content=message.content,
-                        disabled=disabled,
-                        streaming_url=_STREAMING_URL,
-                        is_streaming=generating,
-                        intervention_data=intervention_data,
-                        cursor_loop_enabled=bool(cl.get("enabled")),
-                        preview_content=preview_content,
-                        messages_for_stream=messages_for_stream,
-                        llm_settings=llm_settings_dict,
-                        key=f"editor-{message.id}",
-                    )
-                    if event:
-                        event_type = event.get("type")
-                        if event_type == "streaming_done":
-                            if not st.session_state.get("is_generating", False):
-                                logger.debug("render_messages: stale streaming_done, skipping")
-                            else:
-                                # Check if cursor loop — don't finalize to latest.content (P0-2)
-                                intervention_state = st.session_state.get("streaming_intervention")
-                                if intervention_state and intervention_state.get("_cursor_loop"):
-                                    handle_cursor_loop_preview(
-                                        event.get("content", ""),
-                                        stream_key=event.get("streamKey", ""),
-                                    )
-                                    st.session_state.pop(f"editor-{message.id}", None)
-                                    st.rerun()
-                                else:
-                                    intervention_before = st.session_state.get("streaming_intervention")
-                                    retried = handle_streaming_complete(event)
-                                    st.session_state.pop(f"editor-{message.id}", None)
-                                    if retried or intervention_before is not None:
-                                        logger.info(
-                                            "render_messages: rerun after streaming_done "
-                                            "(retried=%s, had_intervention=%s)",
-                                            retried,
-                                            intervention_before is not None,
-                                        )
-                                        st.rerun()
-                        elif event_type == "streaming_error":
-                            logger.error("render_messages: streaming_error: %s", event.get("message"))
-                            if not st.session_state.get("is_generating", False):
-                                logger.debug("render_messages: stale streaming_error, skipping")
-                            else:
-                                intervention_state = st.session_state.get("streaming_intervention")
-                                if intervention_state and intervention_state.get("_cursor_loop"):
-                                    handle_cursor_loop_error(
-                                        event.get("message", "Unknown streaming error"),
-                                        content=event.get("content", ""),
-                                        stream_key=event.get("streamKey", ""),
-                                    )
-                                    st.rerun()
-                                else:
-                                    handle_streaming_error(event)
-                                    st.rerun()
-                        elif event_type == "line_selected":
-                            sel = event.get("selectionStart", 0)
-                            st.session_state[f"_selected_line_{message.id}"] = sel
-                            # If cursor loop is enabled, start preview on click
-                            if cl.get("enabled"):
-                                handle_cursor_loop_position(message.id, sel)
+            # Componentは常に描画 (P0-1: is_latest_intervenable なら常に)
+            with st.chat_message("assistant"):
+                logger.info("render_messages: editor msg=%s, streaming=%s, has_intervention=%s",
+                            message.id, generating, intervention_data is not None)
+                preview_content = cl.get("preview_content", "") if cl.get("enabled") else ""
+                event = latest_message_editor(
+                    message_id=message.id,
+                    content=message.content,
+                    disabled=disabled,
+                    streaming_url=_STREAMING_URL,
+                    is_streaming=generating,
+                    intervention_data=intervention_data,
+                    cursor_loop_enabled=bool(cl.get("enabled")),
+                    preview_content=preview_content,
+                    messages_for_stream=messages_for_stream,
+                    llm_settings=llm_settings_dict,
+                    key=f"editor-{message.id}",
+                )
+                if event:
+                    event_type = event.get("type")
+                    if event_type == "streaming_done":
+                        if not st.session_state.get("is_generating", False):
+                            logger.debug("render_messages: stale streaming_done, skipping")
+                        else:
+                            intervention_state = st.session_state.get("streaming_intervention")
+                            if intervention_state and intervention_state.get("_cursor_loop"):
+                                handle_cursor_loop_preview(
+                                    event.get("content", ""),
+                                    stream_key=event.get("streamKey", ""),
+                                )
+                                st.session_state.pop(f"editor-{message.id}", None)
                                 st.rerun()
+                            else:
+                                intervention_before = st.session_state.get("streaming_intervention")
+                                retried = handle_streaming_complete(event)
+                                st.session_state.pop(f"editor-{message.id}", None)
+                                if retried or intervention_before is not None:
+                                    logger.info(
+                                        "render_messages: rerun after streaming_done "
+                                        "(retried=%s, had_intervention=%s)",
+                                        retried,
+                                        intervention_before is not None,
+                                    )
+                                    st.rerun()
+                    elif event_type == "streaming_error":
+                        logger.error("render_messages: streaming_error: %s", event.get("message"))
+                        if not st.session_state.get("is_generating", False):
+                            logger.debug("render_messages: stale streaming_error, skipping")
+                        else:
+                            intervention_state = st.session_state.get("streaming_intervention")
+                            if intervention_state and intervention_state.get("_cursor_loop"):
+                                handle_cursor_loop_error(
+                                    event.get("message", "Unknown streaming error"),
+                                    content=event.get("content", ""),
+                                    stream_key=event.get("streamKey", ""),
+                                )
+                                st.rerun()
+                            else:
+                                handle_streaming_error(event)
+                                st.rerun()
+                    elif event_type == "line_selected":
+                        sel = event.get("selectionStart", 0)
+                        st.session_state[f"_selected_line_{message.id}"] = sel
+                        if cl.get("enabled"):
+                            handle_cursor_loop_position(message.id, sel)
+                            st.rerun()
         elif message.role == "assistant" and message.status == "streaming":
             with st.chat_message("assistant"):
                 content = _escape_html(message.content)
@@ -1119,7 +1117,7 @@ def handle_cursor_loop_position(message_id: str, selection_start: int) -> None:
         "frozen_messages": frozen,
         "assistant_prefix": prefix,
         "_cursor_loop": True,
-        "_stream_key": stream_key,
+        "stream_key": stream_key,
     }
     st.session_state["kw_filter"]["retry_count"] = 0
     st.session_state["validator"]["error"] = None
@@ -1175,7 +1173,7 @@ def _apply_cursor_loop() -> None:
     """Apply the cursor loop preview to the actual message."""
     messages: list[ChatMessage] = st.session_state["messages"]
     cl = st.session_state["cursor_loop"]
-    if not messages or not cl["preview_content"]:
+    if not messages or not cl["preview_content"] or cl["status"] != "complete":
         return
     latest = messages[-1]
     before_content = cl.get("original_content", latest.content)

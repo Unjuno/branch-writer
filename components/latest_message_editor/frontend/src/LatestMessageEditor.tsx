@@ -133,7 +133,7 @@ function LatestMessageEditor(props: ComponentProps) {
 
     const newStreamId = generateStreamId()
     streamModeRef.current = mode
-    const thisStreamKey = `${messageId}:${mode}:${extraParams.streamKeySuffix ?? ""}`
+    const thisStreamKey = (extraParams.streamKey as string) || `${messageId}:${mode}:${extraParams.streamKeySuffix ?? ""}`
     console.log("[BranchWriter] startStreaming:", { mode, streamId: newStreamId, streamKey: thisStreamKey })
     doneSentRef.current = false
     failedStreamKeyRef.current = "" // clear any previous failure
@@ -298,9 +298,10 @@ function LatestMessageEditor(props: ComponentProps) {
   }, [streamingUrl, generateStreamId, messageId, messagesForStream, llmSettings])
 
   const interventionKeyRef = useRef("")
-  const interventionKey = interventionData
+  const streamKeyFromData = (interventionData?.streamKey as string) || ""
+  const interventionKey = streamKeyFromData || (interventionData
     ? `${interventionData.selectionStart}:${interventionData.insertion ?? ""}:${interventionData.action ?? ""}`
-    : ""
+    : "")
 
   useEffect(() => {
     const keyChanged = interventionKeyRef.current !== interventionKey
@@ -335,6 +336,7 @@ function LatestMessageEditor(props: ComponentProps) {
             beforeContent: interventionData.beforeContent,
             selectionStart: interventionData.selectionStart,
             frozenMessages: interventionData.frozenMessages,
+            streamKey: interventionData.streamKey,
             streamKeySuffix: interventionKey,
           })
         } else {

@@ -257,7 +257,7 @@ def test_handle_cursor_loop_position_stream_key_format() -> None:
 
         expected_key = f"{assistant.id}:intervention:6::regenerate_from_here"
         assert state["cursor_loop"]["stream_key"] == expected_key
-        assert state["streaming_intervention"]["_stream_key"] == expected_key
+        assert state["streaming_intervention"]["stream_key"] == expected_key
     finally:
         app_module.st = _orig_st
         app_module.is_intervenable = _orig_is_intervenable
@@ -276,7 +276,7 @@ def test_handle_cursor_loop_preview_stores_content_without_modifying_latest() ->
         "messages": [assistant],
         "is_generating": True,
         "last_error": None,
-        "streaming_intervention": {"_cursor_loop": True, "_stream_key": "test-key"},
+        "streaming_intervention": {"_cursor_loop": True, "stream_key": "test-key"},
         "cursor_loop": _cursor_loop_state() | {
             "status": "streaming",
             "original_content": "Hello world",
@@ -313,7 +313,7 @@ def test_handle_cursor_loop_preview_stale_guard() -> None:
         "messages": [assistant],
         "is_generating": True,
         "last_error": None,
-        "streaming_intervention": {"_cursor_loop": True, "_stream_key": "new-key"},
+        "streaming_intervention": {"_cursor_loop": True, "stream_key": "new-key"},
         "cursor_loop": _cursor_loop_state() | {
             "status": "streaming",
             "original_content": "Hello world",
@@ -350,7 +350,7 @@ def test_handle_cursor_loop_error_sets_error_status() -> None:
         "messages": [assistant],
         "is_generating": True,
         "last_error": None,
-        "streaming_intervention": {"_cursor_loop": True, "_stream_key": "test-key"},
+        "streaming_intervention": {"_cursor_loop": True, "stream_key": "test-key"},
         "cursor_loop": _cursor_loop_state() | {
             "status": "streaming",
             "original_content": "Hello world",
@@ -386,7 +386,7 @@ def test_handle_cursor_loop_error_does_not_make_preview_complete() -> None:
         "messages": [assistant],
         "is_generating": True,
         "last_error": None,
-        "streaming_intervention": {"_cursor_loop": True, "_stream_key": "test-key"},
+        "streaming_intervention": {"_cursor_loop": True, "stream_key": "test-key"},
         "cursor_loop": _cursor_loop_state() | {
             "status": "streaming",
             "original_content": "Hello world",
@@ -423,7 +423,7 @@ def test_handle_cursor_loop_error_stale_guard() -> None:
         "messages": [assistant],
         "is_generating": True,
         "last_error": None,
-        "streaming_intervention": {"_cursor_loop": True, "_stream_key": "new-key"},
+        "streaming_intervention": {"_cursor_loop": True, "stream_key": "new-key"},
         "cursor_loop": _cursor_loop_state() | {
             "status": "streaming",
             "original_content": "Hello world",
