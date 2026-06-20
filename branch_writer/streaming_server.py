@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from branch_writer.config import LlmSettings
 from branch_writer.intervention import strip_continuation_overlap
-from branch_writer.llm import LlmError, _iter_chat_completion_chunks
+from branch_writer.llm import LlmError, _iter_chat_completion_chunks, prefill_cache
 from branch_writer.messages import ChatMessage, to_openai_messages
 
 logger = logging.getLogger("branch_writer.streaming_server")
@@ -36,6 +36,19 @@ _active_streams: dict[str, threading.Event] = {}
 _active_streams_lock = threading.Lock()
 _server_started = False
 _server_lock = threading.Lock()
+
+
+@app.post("/api/warmup")
+async def warmup_endpoint(request: Request) -> dict[str, str]:
+    body = await request.json()
+    raw_messages = body.get("messages", [])
+    raw_settings = body.get("settings")
+    if not raw_messages or not raw_settings:
+        return {"status": "skip", "reason": "missing messages or settings"}
+    settings = LlmSettings(**raw_settings)
+    messages = [ChatMessage(role=m.get("role", "user"), content=m.get("content", "")) for m in raw_messages]
+    threading.Thread(target=prefill_cache, args=(messages, settings), daemon=True).start()
+    return {"status": "warming"}
 
 
 @app.get("/health")

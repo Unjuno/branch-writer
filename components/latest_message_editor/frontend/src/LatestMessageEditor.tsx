@@ -9,6 +9,7 @@ type LatestMessageEditorArgs = {
   isStreaming?: boolean; interventionData?: Record<string, unknown> | null
   cursorLoopEnabled?: boolean; previewContent?: string
   messagesForStream?: Array<{ role: string; content: string; id: string }>
+  frozenMessages?: Array<{ role: string; content: string; id: string }>
   keywordFilter?: { enabled?: boolean; words?: string } | null
   llmSettings?: {
     base_url: string; api_key: string; model: string; temperature: number
@@ -71,6 +72,7 @@ function LatestMessageEditor(props: ComponentProps) {
   const isStreaming = Boolean(args.isStreaming)
   const interventionData = args.interventionData ?? null
   const messagesForStream = args.messagesForStream ?? []
+  const frozenMessages = args.frozenMessages ?? []
   const keywordFilter = args.keywordFilter ?? null
   const keywordWords = keywordFilter?.enabled ? parseBadWords(keywordFilter.words ?? "") : []
   const llmSettings = args.llmSettings ?? null
@@ -97,6 +99,8 @@ function LatestMessageEditor(props: ComponentProps) {
   const firstTokenRenderedRef = useRef(false)
   const pendingContentRef = useRef<string | null>(null)
   const coalesceRafRef = useRef<number | null>(null)
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const warmupAbortRef = useRef<AbortController | null>(null)
 
   function getTtftSummary(): Record<string, number | undefined> {
     const t = ttftRef.current
@@ -141,6 +145,32 @@ function LatestMessageEditor(props: ComponentProps) {
     }
   }
 
+  function scheduleWarmup() {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
+    if (!frozenMessages.length || !llmSettings || isStreamingRef.current) return
+    idleTimerRef.current = setTimeout(() => {
+      idleTimerRef.current = null
+      warmupAbortRef.current?.abort()
+      const ctrl = new AbortController()
+      warmupAbortRef.current = ctrl
+      fetch(`${streamingUrl}/api/warmup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: frozenMessages, settings: llmSettings }),
+        signal: ctrl.signal,
+      }).catch(() => {})
+    }, 2000)
+  }
+
+  function cancelWarmup() {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current)
+      idleTimerRef.current = null
+    }
+    warmupAbortRef.current?.abort()
+    warmupAbortRef.current = null
+  }
+
   function logTtft() {
     const t = ttftRef.current
     if (t.t0 !== undefined && t.t6 !== undefined) {
@@ -178,6 +208,22 @@ function LatestMessageEditor(props: ComponentProps) {
     }
   }, [initialContent])
 
+  useEffect(() => {
+    if (frozenMessages.length && !isStreaming && streamingUrl && llmSettings) {
+      idleTimerRef.current = setTimeout(() => {
+        idleTimerRef.current = null
+        const ctrl = new AbortController()
+        warmupAbortRef.current = ctrl
+        fetch(`${streamingUrl}/api/warmup`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: frozenMessages, settings: llmSettings }),
+          signal: ctrl.signal,
+        }).catch(() => {})
+      }, 1000)
+    }
+    return cancelWarmup
+  }, [frozenMessages, isStreaming, streamingUrl, llmSettings])
+
   useLayoutEffect(() => {
     if (!isStreamUpdateRef.current) return
     isStreamUpdateRef.current = false
@@ -203,7 +249,7 @@ function LatestMessageEditor(props: ComponentProps) {
     if (isStreamingRef.current) {
       if (streamHeight !== null) {
         ta.style.height = `${streamHeight}px`
-        ta.style.overflowY = "auto"
+        ta.style.overflowY = "hidden"
       }
       return
     }
@@ -230,6 +276,7 @@ function LatestMessageEditor(props: ComponentProps) {
   }, [])
 
   const startStreaming = useCallback(async (mode: string, extraParams: Record<string, unknown> = {}) => {
+    cancelWarmup()
     if (!streamingUrl || !llmSettings) return
     const newStreamId = generateStreamId()
     const epoch = nextEpoch()
@@ -261,6 +308,8 @@ function LatestMessageEditor(props: ComponentProps) {
     if (textareaRef.current) {
       const h = textareaRef.current.scrollHeight
       setStreamHeight(h)
+      textareaRef.current.style.height = `${h}px`
+      textareaRef.current.style.overflowY = "hidden"
     }
     try {
       const body: Record<string, unknown> = {
@@ -418,12 +467,13 @@ function LatestMessageEditor(props: ComponentProps) {
     if (!isStreaming) { completedRef.current = false; failedStreamKeyRef.current = "" }
   }, [isStreaming, streamingUrl, streamId, startStreaming, interventionData, interventionKey, messageId, streamKeyFromData])
 
-  useEffect(() => () => { abortControllerRef.current?.abort() }, [])
+  useEffect(() => () => { abortControllerRef.current?.abort(); cancelWarmup() }, [])
   useEffect(() => {
     if (!isStreaming && streamId) { abortControllerRef.current?.abort(); setStreamId(null) }
   }, [isStreaming, streamId])
 
   const sendInlineEvent = useCallback((content: string, pos: number) => {
+    cancelWarmup()
     ttftRef.current = { t0: performance.now() }
     firstTokenRenderedRef.current = false
     selectionRef.current = { start: pos, end: pos }
@@ -478,6 +528,7 @@ function LatestMessageEditor(props: ComponentProps) {
           const ta = e.currentTarget
           selectionRef.current = { start: ta.selectionStart, end: ta.selectionEnd }
           setDraftContent(ta.value)
+          scheduleWarmup()
         }}
         onKeyDown={handleKeyDown}
         onSelect={handleSelect}

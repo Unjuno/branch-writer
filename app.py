@@ -522,6 +522,7 @@ def render_messages() -> None:
             with st.chat_message("assistant"):
                 logger.info("render_messages: editor msg=%s, streaming=%s, has_intervention=%s",
                             message.id, generating, intervention_data is not None)
+                frozen = [m for m in messages_for_stream[:-1]] if len(messages_for_stream) > 1 else []
                 event = latest_message_editor(
                     message_id=message.id,
                     content=message.content,
@@ -532,6 +533,7 @@ def render_messages() -> None:
                     cursor_loop_enabled=False,
                     preview_content="",
                     messages_for_stream=messages_for_stream,
+                    frozen_messages=frozen,
                     llm_settings=llm_settings_dict,
                     keyword_filter={
                         "enabled": st.session_state["kw_filter"]["enabled"],

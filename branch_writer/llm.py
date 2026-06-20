@@ -173,6 +173,31 @@ def _extract_delta_content(data: dict[str, Any]) -> str:
     return ""
 
 
+def prefill_cache(messages: list[ChatMessage], settings: LlmSettings) -> None:
+    """Send a prefill-only request to populate Ollama's KV cache.
+
+    Best-effort: sends frozen messages with max_tokens=1,
+    reads one chunk to complete prefill, then aborts.
+    If it fails (timeout, connection error), the cache is simply not primed.
+    """
+    if not messages:
+        return
+    try:
+        api_messages = to_openai_messages(messages, system_prompt=settings.system_prompt)
+        payload = _chat_payload(api_messages=api_messages, settings=settings, stream=True)
+        payload["max_tokens"] = 1
+        url = _chat_completions_url(settings)
+        with httpx.Client(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
+            with client.stream("POST", url, json=payload, headers=_headers(settings)) as resp:
+                if resp.status_code >= 400:
+                    return
+                for line in resp.iter_lines():
+                    if line.startswith("data:") and "content" in line:
+                        break
+    except Exception:
+        logger.debug("prefill_cache: best-effort warmup failed (ignored)")
+
+
 def generate_text(prompt: str, settings: LlmSettings) -> str:
     """Generate a one-shot text response without mutating conversation state."""
     logger.info("generate_text: prompt=%d chars", len(prompt))
