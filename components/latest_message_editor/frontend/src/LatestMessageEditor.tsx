@@ -383,6 +383,13 @@ function LatestMessageEditor(props: ComponentProps) {
       e.preventDefault()
       if (selectedLine !== null) {
         if (isStreaming) {
+          if (streamId) {
+            fetch(`${streamingUrl}/api/abort`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ streamId }),
+            }).catch(() => {})
+          }
           abortControllerRef.current?.abort()
           Streamlit.setComponentValue({
             type: "inline_continue_interrupt",
@@ -408,7 +415,7 @@ function LatestMessageEditor(props: ComponentProps) {
       setSelectedLine(null)
       setDraftInsertion("")
     }
-  }, [selectedLine, selectionStart, draftInsertion, messageId, isStreaming, displayContent])
+  }, [selectedLine, selectionStart, draftInsertion, messageId, isStreaming, displayContent, streamId, streamingUrl])
 
   const canClick = !disabled
   const lines = useMemo(() => textWithCursor.split("\n"), [textWithCursor])

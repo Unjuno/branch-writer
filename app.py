@@ -526,17 +526,23 @@ def render_messages() -> None:
                                 st.session_state.pop(f"editor-{message.id}", None)
                                 st.rerun()
                             else:
-                                intervention_before = st.session_state.get("streaming_intervention")
-                                retried = handle_streaming_complete(event)
-                                st.session_state.pop(f"editor-{message.id}", None)
-                                if retried or intervention_before is not None:
-                                    logger.info(
-                                        "render_messages: rerun after streaming_done "
-                                        "(retried=%s, had_intervention=%s)",
-                                        retried,
-                                        intervention_before is not None,
-                                    )
-                                    st.rerun()
+                                expected_key = intervention_state.get("stream_key", "") if intervention_state else ""
+                                actual_key = event.get("streamKey", "")
+                                if expected_key and actual_key and actual_key != expected_key:
+                                    logger.debug("render_messages: stale streaming_done ignored (streamKey mismatch)")
+                                    st.session_state.pop(f"editor-{message.id}", None)
+                                else:
+                                    intervention_before = st.session_state.get("streaming_intervention")
+                                    retried = handle_streaming_complete(event)
+                                    st.session_state.pop(f"editor-{message.id}", None)
+                                    if retried or intervention_before is not None:
+                                        logger.info(
+                                            "render_messages: rerun after streaming_done "
+                                            "(retried=%s, had_intervention=%s)",
+                                            retried,
+                                            intervention_before is not None,
+                                        )
+                                        st.rerun()
                     elif event_type == "streaming_error":
                         logger.error("render_messages: streaming_error: %s", event.get("message"))
                         if not st.session_state.get("is_generating", False):
@@ -551,8 +557,13 @@ def render_messages() -> None:
                                 )
                                 st.rerun()
                             else:
-                                handle_streaming_error(event)
-                                st.rerun()
+                                expected_key = intervention_state.get("stream_key", "") if intervention_state else ""
+                                actual_key = event.get("streamKey", "")
+                                if expected_key and actual_key and actual_key != expected_key:
+                                    logger.debug("render_messages: stale streaming_error ignored (streamKey mismatch)")
+                                else:
+                                    handle_streaming_error(event)
+                                    st.rerun()
                     elif event_type == "inline_continue":
                         if not generating:
                             sel = int(event.get("selectionStart", 0))
@@ -572,10 +583,12 @@ def render_messages() -> None:
                         current_content = str(event.get("currentContent", ""))
                         insertion = str(event.get("insertion", ""))
                         action = "insert_and_continue" if insertion else "regenerate_from_here"
-                        if not current_content:
-                            logger.warning("render_messages: inline_continue_interrupt with empty currentContent")
-                        else:
-                            messages_list: list[ChatMessage] = st.session_state["messages"]
+                        messages_list: list[ChatMessage] = st.session_state["messages"]
+                        if not current_content and messages_list:
+                            current_content = messages_list[-1].content
+                            logger.info("render_messages: inline_continue_interrupt used message.content as fallback")
+                        if current_content:
+                            sel = max(0, min(sel, len(current_content)))
                             if messages_list:
                                 latest_msg = messages_list[-1]
                                 if latest_msg.id == message.id:
