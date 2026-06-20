@@ -99,8 +99,8 @@ function LatestMessageEditor(props: ComponentProps) {
   useLayoutEffect(() => {
     const ta = textareaRef.current
     if (!ta) return
-    ta.style.height = "0px"
-    ta.style.height = `${ta.scrollHeight}px`
+    ta.style.height = "auto"
+    ta.style.height = `${Math.min(ta.scrollHeight, 520)}px`
   }, [draftContent])
 
   const generateStreamId = useCallback(() => `${messageId}:stream:${Date.now()}:${Math.random().toString(36).slice(2)}`, [messageId])
@@ -296,7 +296,7 @@ function LatestMessageEditor(props: ComponentProps) {
           fontSize: "inherit", fontFamily: "inherit", lineHeight: 1.7,
           color: "var(--bw-text)", background: "transparent",
           border: "none", borderRadius: 0, outline: "none", boxShadow: "none",
-          minHeight: "3rem", resize: "none", overflow: "hidden",
+          minHeight: "3rem", maxHeight: "520px", resize: "none", overflowY: "auto",
           whiteSpace: "pre-wrap", wordWrap: "break-word",
         }}
       />

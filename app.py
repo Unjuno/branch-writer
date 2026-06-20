@@ -84,41 +84,16 @@ def _inject_custom_css() -> None:
     st.session_state["_custom_css_injected"] = True
     st.markdown(
         """<style>
-@keyframes bw-blink {
-    50% { opacity: 0; }
-}
-
 .bw-thinking {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 14px;
-    border-radius: 20px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
+    display: inline-block;
+    padding: 2px 0;
+    color: var(--text-color);
     font-size: 0.9rem;
-    font-weight: 600;
-    box-shadow: 0 2px 8px rgba(102,126,234,0.4);
-}
-.bw-thinking::after {
-    content: "";
-    width: 8px;
-    height: 8px;
-    margin-left: 4px;
-    border-radius: 50%;
-    background: white;
-    animation: bw-dot 1.2s ease-in-out infinite;
-}
-@keyframes bw-dot {
-    0%, 100% { opacity: 0.3; transform: scale(0.8); }
-    50% { opacity: 1; transform: scale(1.2); }
+    font-weight: 400;
 }
 
 .bw-cursor {
-    animation: bw-blink 0.9s step-end infinite;
     color: var(--primary-color);
-    font-weight: bold;
-    font-size: 1.1em;
 }
 
 [data-testid="stSidebar"] {
@@ -185,13 +160,10 @@ def render_context_usage() -> None:
     col2.metric("出力枠", f"{output_headroom:,}")
     col3.metric("上限", f"{ctx:,}")
 
-    bar_color = ""
     warn = ""
     if used_ratio >= 0.90:
-        bar_color = "🔥 "
         warn = "危険: コンテキストがほぼ一杯です！"
     elif used_ratio >= 0.70:
-        bar_color = "⚠️ "
         warn = "警告: コンテキスト残りわずか"
 
     progress_val = min(used_ratio, 1.0)
@@ -199,7 +171,7 @@ def render_context_usage() -> None:
 
     st.sidebar.progress(
         progress_val,
-        text=f"{bar_color}{input_tokens:,} in + {output_headroom:,} out = {total_usage:,} / {ctx:,} ({pct}%)",
+        text=f"{input_tokens:,} in + {output_headroom:,} out = {total_usage:,} / {ctx:,} ({pct}%)",
     )
 
     if warn:
@@ -209,7 +181,7 @@ def render_context_usage() -> None:
             st.sidebar.warning(warn)
 
     if used_ratio >= 0.70:
-        st.sidebar.caption("💡 チャットをクリアするか、Max Tokens を減らして空きを確保してください。")
+        st.sidebar.caption("チャットをクリアするか、Max Tokens を減らして空きを確保してください。")
 
 
 def render_sidebar() -> None:
@@ -236,7 +208,7 @@ def render_sidebar() -> None:
         key="system_prompt_input",
     )
 
-    if st.sidebar.button("🔄 モデル一覧を再取得", disabled=is_generating, key="discover_models_btn"):
+    if st.sidebar.button("モデル一覧を再取得", disabled=is_generating, key="discover_models_btn"):
         with st.spinner("モデル一覧を取得中..."):
             resolved = _probe_base_url(settings.base_url)
             if resolved and resolved != settings.base_url:
@@ -369,6 +341,13 @@ def reset_chat_state() -> None:
     st.session_state["validator"]["results"] = None
 
 
+def _reset_validation_cache() -> None:
+    cache = st.session_state.setdefault("validation_cache", {})
+    cache["content_hash"] = ""
+    cache["results"] = None
+    cache["error"] = None
+
+
 def _escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -390,7 +369,7 @@ def render_intervention_panel() -> dict[str, Any] | None:
         return None
 
     st.divider()
-    st.caption("✂️ 介入 — スライダーで位置を選んで書き換え")
+    st.caption("介入 - スライダーで位置を選んで書き換え")
 
     max_index = len(latest.content)
     selection_start = st.slider(
@@ -812,8 +791,6 @@ def handle_streaming_error(event: dict[str, Any]) -> None:
             before = intervention.get("before_content")
             if before:
                 latest.content = before
-        else:
-            latest.content = ""
 
     latest.status = "error"
     set_error(st.session_state, f"Streaming error: {event.get('message', 'Unknown')}")
@@ -839,9 +816,7 @@ def handle_user_prompt(prompt: str) -> None:
 
     st.session_state["kw_filter"]["retry_count"] = 0
     st.session_state["validator"]["error"] = None
-    st.session_state["validation_cache"]["content_hash"] = ""
-    st.session_state["validation_cache"]["results"] = None
-    st.session_state["validation_cache"]["error"] = None
+    _reset_validation_cache()
 
 
 def handle_streaming_complete(event: dict[str, Any]) -> bool:
@@ -1015,9 +990,7 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
 
     st.session_state["kw_filter"]["retry_count"] = 0
     st.session_state["validator"]["error"] = None
-    st.session_state["validation_cache"]["content_hash"] = ""
-    st.session_state["validation_cache"]["results"] = None
-    st.session_state["validation_cache"]["error"] = None
+    _reset_validation_cache()
 
     # Streaming will be handled by React component via SSE
     # No need to create a generator here
@@ -1101,9 +1074,7 @@ def handle_cursor_loop_position(message_id: str, selection_start: int) -> None:
     }
     st.session_state["kw_filter"]["retry_count"] = 0
     st.session_state["validator"]["error"] = None
-    st.session_state["validation_cache"]["content_hash"] = ""
-    st.session_state["validation_cache"]["results"] = None
-    st.session_state["validation_cache"]["error"] = None
+    _reset_validation_cache()
 
 
 def handle_cursor_loop_preview(content: str, stream_key: str = "") -> None:
@@ -1218,7 +1189,7 @@ def render_validator_panel() -> None:
         st.sidebar.warning(val["error"])
 
     # ── キーワードフィルター ──
-    st.sidebar.subheader("🚫 リアルタイムキーワードフィルター")
+    st.sidebar.subheader("リアルタイムキーワードフィルター")
     st.sidebar.caption("1トークンごとにチェック、引っかかったら即リトライ")
 
     kw["enabled"] = st.sidebar.checkbox(
@@ -1238,7 +1209,7 @@ def render_validator_panel() -> None:
 
     rc = kw["retry_count"]
     if rc > 0:
-        st.sidebar.caption(f"🔄 リトライ中 ({rc}/{kw['max_retries']})")
+        st.sidebar.caption(f"リトライ中 ({rc}/{kw['max_retries']})")
 
     kw["max_retries"] = st.sidebar.number_input(
         "最大リトライ回数",
@@ -1253,7 +1224,7 @@ def render_validator_panel() -> None:
     st.sidebar.divider()
 
     # ── LLM検証器 ──
-    st.sidebar.subheader("🤖 LLM検証器（事後）")
+    st.sidebar.subheader("LLM検証器（事後）")
     st.sidebar.caption("生成完了後にLLMが問題箇所を分析、JSONで位置を返す")
 
     val["enabled"] = st.sidebar.checkbox(
@@ -1275,7 +1246,7 @@ def render_validator_panel() -> None:
     # 手動実行ボタン
     if val["enabled"] and messages:
         st.sidebar.caption("手動で実行する場合:")
-        if st.sidebar.button("🔍 LLM検証を実行", key="llm_run_btn", disabled=is_generating):
+        if st.sidebar.button("LLM検証を実行", key="llm_run_btn", disabled=is_generating):
             _run_llm_validator(messages[-1].content)
             st.rerun()
 
@@ -1283,7 +1254,7 @@ def render_validator_panel() -> None:
     llm_results = val["results"]
     if llm_results:
         st.sidebar.divider()
-        st.sidebar.caption(f"📋 LLM検証: {len(llm_results)}件の問題")
+        st.sidebar.caption(f"LLM検証: {len(llm_results)}件の問題")
         for i, issue in enumerate(llm_results):
             pos = issue.get("position", 0)
             reason = issue.get("reason", "?")
@@ -1292,7 +1263,7 @@ def render_validator_panel() -> None:
             st.sidebar.error(f"#{i+1} pos={pos}: {reason}")
             if frag:
                 st.sidebar.code(frag, line_limit=3)
-            if st.sidebar.button("↩️ この位置から再生成", key=f"llm-fix-{i}", disabled=is_generating):
+            if st.sidebar.button("この位置から再生成", key=f"llm-fix-{i}", disabled=is_generating):
                 _keyword_retry_from_position(pos)
                 st.rerun()
 
@@ -1302,16 +1273,16 @@ def _first_launch_wizard() -> None:
     if st.session_state["messages"] or settings.model.strip():
         return
 
-    st.info("### 🚀 Branch Writer へようこそ！\n\nまずはAIモデルに接続します。")
+    st.info("### Branch Writer へようこそ\n\nまずはAIモデルに接続します。")
 
     with st.spinner("ローカルLLMを検出中..."):
         resolved = _probe_base_url("")
         if resolved:
             settings.base_url = resolved
-            st.success(f"✅ エンドポイントを検出: `{resolved}`")
+            st.success(f"エンドポイントを検出: `{resolved}`")
         else:
             st.error(
-                "❌ Ollama / LM Studio が見つかりません。\n\n"
+                "Ollama / LM Studio が見つかりません。\n\n"
                 "- **Ollama**: https://ollama.com/download"
                 " からインストール後、`ollama pull llama3.2:1b` を実行\n"
                 "- **LM Studio**: https://lmstudio.ai"
@@ -1328,12 +1299,12 @@ def _first_launch_wizard() -> None:
         ctx, out = lookup_model_capabilities(settings.model)
         settings.context_window = ctx
         settings.max_tokens = out
-        st.success(f"✅ モデル `{settings.model}` を選択しました。")
+        st.success(f"モデル `{settings.model}` を選択しました。")
         st.rerun()
     else:
         st.warning(
-            "⚠️  エンドポイントは検出できましたが、利用可能なモデルが見つかりません。\n\n"
-            "サイドバーの「🔄 モデル一覧を再取得」ボタンを試すか、モデル名を直接入力してください。"
+            "エンドポイントは検出できましたが、利用可能なモデルが見つかりません。\n\n"
+            "サイドバーの「モデル一覧を再取得」ボタンを試すか、モデル名を直接入力してください。"
         )
 
     st.button("OK, はじめる", key="wizard_dismiss")
@@ -1353,7 +1324,7 @@ def _start_streaming_server() -> None:
 
 def main() -> None:
     logger.info("main: Branch Writer starting")
-    st.set_page_config(page_title="Branch Writer", page_icon="✍️", layout="wide")
+    st.set_page_config(page_title="Branch Writer", page_icon=None, layout="wide")
     initialize_state(st.session_state)
     _inject_custom_css()
     _start_streaming_server()

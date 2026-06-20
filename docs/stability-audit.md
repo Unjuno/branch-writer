@@ -31,11 +31,11 @@ Date: 2026-06-19
 
 ## 4. Intervention position specification
 
-- **Current**: UI uses **line-based selection** (splits by `\n`, calculates char position by summing `lines[i].length + 1`).
-- **JS**: `String.prototype.length` and `split("\n")` use **UTF-16 code units**, not code points. For characters outside the BMP (emoji), this gives wrong indices.
-- **Python**: `len()` and `[:n]` slicing use **Unicode code points**.
-- **Fix**: `validate_selection_start()` in Python already protects against out-of-range values. JS should eventually use `Array.from()` for code-point-accurate indexing, but this is noted as a known discrepancy for future work.
-- **Tests** (`test_intervention.py`): Added emoji, surrogate pair (𝄞), newline, and mixed emoji+newline tests confirming Python-side correctness.
+- **Current**: UI uses a controlled `textarea` and sends `currentContent` plus `selectionStart` when Enter is pressed.
+- **JS**: DOM `selectionStart` is a UTF-16 code-unit offset.
+- **Python**: `len()` and `[:n]` slicing use Unicode code points.
+- **Fix** (`LatestMessageEditor.tsx`): Convert the DOM offset to a Python code-point offset before sending the event.
+- **Tests** (`test_intervention.py`): Emoji, surrogate pair (`𝄞`), newline, and mixed Unicode tests confirm Python-side slicing behavior.
 
 ## 5. Intervention streaming merge logic
 
@@ -50,19 +50,19 @@ Traced all paths that must lead to `set_generating(False)`:
 
 | Scenario | Resolution | Status |
 |---|---|---|
-| Normal streaming done | `handle_streaming_complete` → `set_generating(False)` | ✅ Already correct |
-| Intervention streaming done | Same as above | ✅ |
-| Streaming error | `handle_streaming_error` → `set_generating(False)` | ✅ Fixed |
-| Aborted stream | React sets `completedRef=false`, `streamId=null`; no Python event sent. On next rerun a new stream starts. | ✅ Not stuck (rerun resumes) |
-| Keyword retry exhausted | `handle_streaming_complete` → `retried=False` → `set_generating(False)` | ✅ Already correct |
-| Validator error | Same as above | ✅ |
-| LM Studio / Ollama offline | Yields SSE `error` → React sends `streaming_error` → `set_generating(False)` | ✅ Fixed |
+| Normal streaming done | `handle_streaming_complete` -> `set_generating(False)` | Correct |
+| Intervention streaming done | Same as above | Correct |
+| Streaming error | `handle_streaming_error` -> `set_generating(False)` | Fixed |
+| Aborted stream | React sets `completedRef=false`, `streamId=null`; no Python event sent. On next rerun a new stream starts. | Not stuck |
+| Keyword retry exhausted | `handle_streaming_complete` -> `retried=False` -> `set_generating(False)` | Correct |
+| Validator error | Same as above | Correct |
+| LM Studio / Ollama offline | Yields SSE `error` -> React sends `streaming_error` -> `set_generating(False)` | Fixed |
 
 ## 7. Dependencies
 
 - **`requirements.txt`**: Added `fastapi>=0.110`, `uvicorn>=0.29` (were missing despite being used at runtime).
 - **Frontend build**: Verified `npm run build` passes in CI (`.github/workflows/ci.yml`).
-- **Python tests**: Verified `python -m pytest` passes (82 tests).
+- **Python tests**: Verified `python -m pytest` passes for the non-browser suite.
 - **CI**: Both `test` and `frontend` jobs defined in `.github/workflows/ci.yml`.
 
 ## 8. Log audit
