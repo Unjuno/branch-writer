@@ -1,4 +1,4 @@
-import React, { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import React, { CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ComponentProps, Streamlit } from "streamlit-component-lib"
 
 type StreamingDoneEvent = { type: "streaming_done"; content: string; messageId: string; streamKey?: string }
@@ -55,15 +55,31 @@ function LatestMessageEditor(props: ComponentProps) {
   const isComposingRef = useRef(false)
   const isEditingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const selectionRef = useRef<{ start: number; end: number } | null>(null)
 
   const cursorLineCount = useMemo(() => Math.max(draftContent.split("\n").length, 1), [draftContent])
 
   useEffect(() => { Streamlit.setFrameHeight() }, [draftContent])
 
   useEffect(() => {
-    setDraftContent(initialContent)
+    if (!isEditingRef.current) {
+      setDraftContent(initialContent)
+    }
     isEditingRef.current = false
   }, [initialContent])
+
+  useLayoutEffect(() => {
+    const ta = textareaRef.current
+    if (ta && selectionRef.current && document.activeElement === ta) {
+      const clamped = {
+        start: Math.min(selectionRef.current.start, ta.value.length),
+        end: Math.min(selectionRef.current.end, ta.value.length),
+      }
+      if (ta.selectionStart !== clamped.start || ta.selectionEnd !== clamped.end) {
+        ta.setSelectionRange(clamped.start, clamped.end)
+      }
+    }
+  })
 
   const generateStreamId = useCallback(() => `${messageId}:stream:${Date.now()}:${Math.random().toString(36).slice(2)}`, [messageId])
 
@@ -111,7 +127,10 @@ function LatestMessageEditor(props: ComponentProps) {
             try {
               const parsed = JSON.parse(data)
               if (eventType === "token") {
-                accumulatedRef.current = parsed.fullContent ?? (accumulatedRef.current + (parsed.text ?? ""))
+                const nextContent = parsed.fullContent ?? (accumulatedRef.current + (parsed.text ?? ""))
+                if (nextContent.length >= accumulatedRef.current.length) {
+                  accumulatedRef.current = nextContent
+                }
                 if (!isEditingRef.current) setDraftContent(accumulatedRef.current)
               } else if (eventType === "done") {
                 const finalContent = parsed.fullContent ?? accumulatedRef.current
@@ -204,6 +223,13 @@ function LatestMessageEditor(props: ComponentProps) {
     isEditingRef.current = false
   }, [isStreaming, streamId, streamingUrl, messageId])
 
+  const handleSelect = useCallback(() => {
+    const ta = textareaRef.current
+    if (ta && document.activeElement === ta) {
+      selectionRef.current = { start: ta.selectionStart, end: ta.selectionEnd }
+    }
+  }, [])
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const native = e.nativeEvent as KeyboardEvent
     if (isComposingRef.current || native.isComposing || native.keyCode === 229) return
@@ -224,8 +250,10 @@ function LatestMessageEditor(props: ComponentProps) {
         ref={textareaRef}
         value={draftContent}
         onChange={e => { isEditingRef.current = true; setDraftContent(e.target.value) }}
-        onFocus={() => { isEditingRef.current = true }}
         onKeyDown={handleKeyDown}
+        onSelect={handleSelect}
+        onMouseUp={handleSelect}
+        onKeyUp={handleSelect}
         onCompositionStart={() => { isComposingRef.current = true }}
         onCompositionEnd={() => { isComposingRef.current = false }}
         rows={cursorLineCount}

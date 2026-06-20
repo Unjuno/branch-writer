@@ -130,27 +130,21 @@ def _stream_intervention(
                 yield _sse_event("aborted", {"streamId": stream_id})
                 return
             raw_continuation += chunk
-            # overlap strippingはbase_content基準 (assistant_prefix + insertion) で行う
             clean = strip_continuation_overlap(base_content, raw_continuation)
             full_content = base_content + clean
-            # deltaのみ送信 (毎chunkごとにclean全文を再送しない)
             new_chars = clean[last_clean_len:]
+            if not new_chars:
+                continue
             last_clean_len = len(clean)
-            for char in new_chars:
-                if abort and abort.is_set():
-                    yield _sse_event("aborted", {"streamId": stream_id})
-                    return
-                yield _sse_event(
-                    "token",
-                    {
-                        "text": char,
-                        "streamId": stream_id,
-                        "fullContent": full_content,
-                        "action": action,
-                        "selectionStart": selection_start,
-                        "insertion": insertion,
-                    },
-                )
+            yield _sse_event(
+                "token",
+                {
+                    "fullContent": full_content,
+                    "action": action,
+                    "selectionStart": selection_start,
+                    "insertion": insertion,
+                },
+            )
         clean = strip_continuation_overlap(base_content, raw_continuation)
         full_content = base_content + clean
         logger.info("_stream_intervention: done, streamId=%s, %d chars", stream_id, len(full_content))
