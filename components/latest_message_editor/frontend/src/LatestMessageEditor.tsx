@@ -304,6 +304,8 @@ function LatestMessageEditor(props: ComponentProps) {
       failedStreamKeyRef.current = ""
       abortControllerRef.current?.abort()
       setStreamId(null)
+      setSelectedLine(null)
+      setDraftInsertion("")
     }
 
     const currentStreamKey = streamKeyFromData || `${messageId}:${streamModeRef.current}:${interventionKey}`
@@ -349,7 +351,6 @@ function LatestMessageEditor(props: ComponentProps) {
   }, [isStreaming, streamId])
 
   const clickLine = useCallback((lineIndex: number) => {
-    if (disabled || isActivelyStreaming) return
     if (selectedLine === lineIndex) {
       setSelectedLine(null)
       setDraftInsertion("")
@@ -367,7 +368,7 @@ function LatestMessageEditor(props: ComponentProps) {
     setSelectionStart(charPos)
     setSelectedLine(lineIndex)
     setDraftInsertion("")
-  }, [disabled, isActivelyStreaming, initialContent, selectedLine])
+  }, [initialContent, selectedLine])
 
   useEffect(() => {
     if (selectedLine !== null && inputRef.current) {
@@ -376,25 +377,31 @@ function LatestMessageEditor(props: ComponentProps) {
   }, [selectedLine])
 
   const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (isComposingRef.current) return
+    const native = e.nativeEvent as KeyboardEvent
+    if (isComposingRef.current || native.isComposing || native.keyCode === 229) return
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       if (selectedLine !== null) {
+        const eventType = isStreaming ? "inline_continue_pending" : "inline_continue"
         Streamlit.setComponentValue({
-          type: "inline_continue",
+          type: eventType,
           messageId,
           selectionStart,
           insertion: draftInsertion,
           requestId: `${messageId}:inline:${selectionStart}:${Date.now()}`,
         })
+        if (!isStreaming) {
+          setSelectedLine(null)
+          setDraftInsertion("")
+        }
       }
     } else if (e.key === "Escape") {
       setSelectedLine(null)
       setDraftInsertion("")
     }
-  }, [selectedLine, selectionStart, draftInsertion, messageId])
+  }, [selectedLine, selectionStart, draftInsertion, messageId, isStreaming])
 
-  const canClick = !disabled && !isActivelyStreaming
+  const canClick = !disabled
   const lines = useMemo(() => textWithCursor.split("\n"), [textWithCursor])
 
   return (
@@ -432,7 +439,7 @@ function LatestMessageEditor(props: ComponentProps) {
               >
                 {line || "\u00a0"}
               </div>
-              {isSelected && !isActivelyStreaming && (
+              {isSelected && (
                 <div style={{ margin: "4px 0 8px 0" }}>
                   <input
                     ref={inputRef}
@@ -442,7 +449,6 @@ function LatestMessageEditor(props: ComponentProps) {
                     onKeyDown={handleInputKeyDown}
                     onCompositionStart={() => { isComposingRef.current = true }}
                     onCompositionEnd={() => { isComposingRef.current = false }}
-                    disabled={disabled}
                     placeholder="入力してEnter / 空Enterでここから再生成"
                     style={{
                       width: "100%",

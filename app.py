@@ -474,7 +474,6 @@ def render_messages() -> None:
         if is_latest_intervenable and component_available():
             in_intervention = st.session_state.get("streaming_intervention") is not None
             generating = bool(st.session_state["is_generating"])
-            disabled = in_intervention
 
             intervention_data = None
             if in_intervention:
@@ -502,7 +501,7 @@ def render_messages() -> None:
                 event = latest_message_editor(
                     message_id=message.id,
                     content=message.content,
-                    disabled=disabled,
+                    disabled=False,
                     streaming_url=_STREAMING_URL,
                     is_streaming=generating,
                     intervention_data=intervention_data,
@@ -568,6 +567,24 @@ def render_messages() -> None:
                                 "insertion": insertion,
                             }
                             st.rerun()
+                    elif event_type == "inline_continue_pending":
+                        sel = int(event.get("selectionStart", 0))
+                        st.session_state["pending_inline_continue"] = {
+                            "requestId": event.get("requestId") or f"{message.id}:pending:{sel}:{__import__('time').time()}",
+                            "messageId": message.id,
+                            "selectionStart": sel,
+                            "selectionEnd": sel,
+                            "insertion": str(event.get("insertion", "")),
+                        }
+                        logger.info("render_messages: saved pending inline_continue (sel=%d)", sel)
+
+                # P0-3: execute pending inline_continue after generating stops
+                pending = st.session_state.pop("pending_inline_continue", None)
+                if pending and not st.session_state.get("is_generating", False):
+                    insertion = pending.get("insertion", "")
+                    pending["action"] = "insert_and_continue" if insertion else "regenerate_from_here"
+                    st.session_state["_intervention_event"] = pending
+                    st.rerun()
         elif message.role == "assistant" and message.status == "streaming":
             with st.chat_message("assistant"):
                 content = _escape_html(message.content)
