@@ -205,8 +205,11 @@ CI runs automatically on push/PR to `main` — Python tests (3.11) and frontend 
 | [Concept](docs/concept.md) | Product philosophy and design decisions |
 | [Usage](docs/usage.md) | User operation guide |
 | [Architecture](docs/architecture.md) | Implementation structure |
+| [Intervention UX](docs/intervention-ux.md) | UX spec for developers |
 | [Development](docs/development.md) | Build, test, and dev process |
 | [Known Limitations](docs/known-limitations.md) | What this project is **not** |
+| [Optimization Strategy](docs/optimization-strategy.md) | Performance roadmap (TTFT) |
+| [Stability Audit](docs/stability-audit.md) | Error handling audit |
 | [Roadmap](docs/roadmap.md) | Future priorities |
 
 ---
@@ -215,7 +218,7 @@ CI runs automatically on push/PR to `main` — Python tests (3.11) and frontend 
 
 PRs are welcome. If you're planning a larger change, please open an issue first to discuss.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) (if present) or the [development docs](docs/development.md) to get started.
+See the [development docs](docs/development.md) to get started.
 
 ---
 

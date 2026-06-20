@@ -73,9 +73,6 @@ data/
 # opencode config
 opencode.json
 
-# Unused React component
-# NOTE: components/ is commented out because LatestMessageEditor is in use
-
 # Debug / temp files
 Untitled
 console-warnings.txt
