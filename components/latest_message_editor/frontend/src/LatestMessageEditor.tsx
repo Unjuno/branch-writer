@@ -41,13 +41,6 @@ function codePointOffsetFromDomOffset(text: string, domOffset: number): number {
   return count
 }
 
-function commonPrefixLength(a: string, b: string): number {
-  const limit = Math.min(a.length, b.length)
-  let i = 0
-  while (i < limit && a[i] === b[i]) i++
-  return i
-}
-
 function LatestMessageEditor(props: ComponentProps) {
   const args = props.args as LatestMessageEditorArgs
   const theme = (props as ComponentProps & { theme?: StreamlitTheme }).theme
@@ -75,6 +68,7 @@ function LatestMessageEditor(props: ComponentProps) {
   const isStreamUpdateRef = useRef(false)
   const typewriterTimerRef = useRef<number | null>(null)
   const targetContentRef = useRef(initialContent)
+  const displayedContentRef = useRef(initialContent)
 
   useEffect(() => { Streamlit.setFrameHeight() }, [draftContent])
 
@@ -95,16 +89,19 @@ function LatestMessageEditor(props: ComponentProps) {
     }
 
     if (instant) {
+      displayedContentRef.current = target
       isStreamUpdateRef.current = true
       setDraftContent(target)
       return
     }
 
-    const current = draftContent
-    if (current === target) return
-
-    const prefixLen = commonPrefixLength(current, target)
-    let currentValue = current.slice(0, prefixLen)
+    if (displayedContentRef.current === target) return
+    if (!target.startsWith(displayedContentRef.current)) {
+      displayedContentRef.current = draftContent
+      if (!target.startsWith(displayedContentRef.current)) {
+        displayedContentRef.current = target.slice(0, Math.max(0, displayedContentRef.current.length))
+      }
+    }
 
     typewriterTimerRef.current = window.setInterval(() => {
       if (isEditingRef.current) {
@@ -115,7 +112,8 @@ function LatestMessageEditor(props: ComponentProps) {
         return
       }
 
-      if (currentValue === targetContentRef.current) {
+      const nextTarget = targetContentRef.current
+      if (displayedContentRef.current === nextTarget) {
         if (typewriterTimerRef.current !== null) {
           window.clearInterval(typewriterTimerRef.current)
           typewriterTimerRef.current = null
@@ -123,21 +121,27 @@ function LatestMessageEditor(props: ComponentProps) {
         return
       }
 
-      const nextTarget = targetContentRef.current
-      if (currentValue.length < nextTarget.length) {
-        currentValue = nextTarget.slice(0, currentValue.length + 1)
+      if (nextTarget.startsWith(displayedContentRef.current)) {
+        displayedContentRef.current = nextTarget.slice(0, displayedContentRef.current.length + 1)
       } else {
-        currentValue = nextTarget
+        displayedContentRef.current = nextTarget
       }
 
       isStreamUpdateRef.current = true
-      setDraftContent(currentValue)
+      setDraftContent(displayedContentRef.current)
     }, 16)
   }, [draftContent])
 
   useEffect(() => {
     if (!isEditingRef.current) {
-      animateToTarget(initialContent, !isStreaming)
+      if (isStreaming) {
+        targetContentRef.current = initialContent
+        if (typewriterTimerRef.current === null) {
+          animateToTarget(initialContent)
+        }
+      } else {
+        animateToTarget(initialContent, true)
+      }
     }
   }, [initialContent, animateToTarget, isStreaming])
 
@@ -274,6 +278,7 @@ function LatestMessageEditor(props: ComponentProps) {
         if (hasIntervention) {
           startStreaming("intervention", {
             baseContent: interventionData.baseContent, assistantPrefix: interventionData.assistantPrefix,
+            generationPrefix: interventionData.generationPrefix,
             insertion: interventionData.insertion, action: interventionData.action,
             beforeContent: interventionData.beforeContent, selectionStart: interventionData.selectionStart,
             frozenMessages: interventionData.frozenMessages, streamKey: interventionData.streamKey,

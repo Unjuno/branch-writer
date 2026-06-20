@@ -487,6 +487,7 @@ def render_messages() -> None:
                         ],
                         "baseContent": intervention_state.get("base_content", ""),
                         "assistantPrefix": intervention_state.get("assistant_prefix", ""),
+                        "generationPrefix": intervention_state.get("generation_prefix", ""),
                         "insertion": intervention_state.get("insertion", ""),
                         "action": intervention_state.get("action", "regenerate_from_here"),
                         "beforeContent": intervention_state.get("before_content", ""),
@@ -980,6 +981,9 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
     prefix = draft_content[:selection_start]
     effective_insertion = insertion if action == "insert_and_continue" else ""
     base_content = prefix + effective_insertion
+    generation_prefix = base_content
+    if not effective_insertion and selection_start >= len(draft_content):
+        generation_prefix = base_content + "\n"
     latest.content = base_content
     latest.status = "streaming"
 
@@ -995,6 +999,7 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
         "action": action,
         "frozen_messages": frozen,
         "assistant_prefix": prefix,
+        "generation_prefix": generation_prefix,
         "stream_key": stream_key,
     }
 
@@ -1048,6 +1053,7 @@ def handle_cursor_loop_position(message_id: str, selection_start: int) -> None:
     original_content = latest.content
     prefix = original_content[:selection_start]
     frozen = frozen_messages_before_latest(messages)
+    generation_prefix = prefix + "\n" if selection_start >= len(original_content) else prefix
 
     stream_key = f"{message_id}:intervention:{selection_start}::regenerate_from_here"
 
@@ -1076,6 +1082,7 @@ def handle_cursor_loop_position(message_id: str, selection_start: int) -> None:
         "action": "regenerate_from_here",
         "frozen_messages": frozen,
         "assistant_prefix": prefix,
+        "generation_prefix": generation_prefix,
         "_cursor_loop": True,
         "stream_key": stream_key,
     }

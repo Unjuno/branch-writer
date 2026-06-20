@@ -104,6 +104,7 @@ def _stream_normal(
 def _stream_intervention(
     frozen_messages: list[ChatMessage],
     assistant_prefix: str,
+    generation_prefix: str,
     insertion: str,
     before_content: str,
     selection_start: int,
@@ -113,6 +114,7 @@ def _stream_intervention(
 ) -> Generator[str, None, None]:
     """Stream an intervention continuation character by character."""
     base_content = assistant_prefix + insertion
+    prompt_prefix = generation_prefix + insertion if generation_prefix else base_content
     logger.info("_stream_intervention: streamId=%s, action=%s, selectionStart=%d, base=%d chars",
                 stream_id, action, selection_start, len(base_content))
     abort = _active_streams.get(stream_id)
@@ -122,7 +124,7 @@ def _stream_intervention(
         for chunk in _iter_chat_completion_chunks(
             api_messages=[
                 *to_openai_messages(frozen_messages, system_prompt=settings.system_prompt),
-                {"role": "assistant", "content": base_content},
+                {"role": "assistant", "content": prompt_prefix},
             ],
             settings=settings,
         ):
@@ -187,10 +189,11 @@ async def stream_endpoint(request: Request) -> StreamingResponse:
 
     if mode in ("intervention", "cursor_loop"):
         frozen_data = body.get("frozenMessages", [])
-        frozen_messages = [ChatMessage(**m) for m in frozen_data]
-        generator = _stream_intervention(
+            frozen_messages = [ChatMessage(**m) for m in frozen_data]
+            generator = _stream_intervention(
             frozen_messages=frozen_messages,
             assistant_prefix=body.get("assistantPrefix", ""),
+            generation_prefix=body.get("generationPrefix", ""),
             insertion=body.get("insertion", ""),
             before_content=body.get("beforeContent", ""),
             selection_start=body.get("selectionStart", 0),
