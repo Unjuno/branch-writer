@@ -78,6 +78,31 @@ function LatestMessageEditor(props: ComponentProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const selectionRef = useRef<{ start: number; end: number } | null>(null)
   const isStreamUpdateRef = useRef(false)
+  const ttftRef = useRef<Record<string, number | undefined>>({})
+  const firstTokenRenderedRef = useRef(false)
+
+  function logTtft() {
+    const t = ttftRef.current
+    if (t.t0 !== undefined && t.t6 !== undefined) {
+      const total = (t.t6 - t.t0).toFixed(1)
+      const dispatch = t.t1 !== undefined ? (t.t1 - t.t0).toFixed(1) : "?"
+      const sseLatency = t.t5 !== undefined ? (t.t5 - (t.t1 ?? t.t0)).toFixed(1) : "?"
+      const render = t.t6 !== undefined && t.t5 !== undefined ? (t.t6 - t.t5).toFixed(1) : "?"
+      const prefill = t.t4 !== undefined && t.t3 !== undefined ? ((t.t4 - t.t3) * 1000).toFixed(1) : "?"
+      const serverProcess = t.t3 !== undefined && t.t2 !== undefined ? ((t.t3 - t.t2) * 1000).toFixed(1) : "?"
+      const usage = t.times ? (t.times as any)?.usage : null
+      const usageStr = usage ? ` | prompt=${usage.prompt_tokens} completion=${usage.completion_tokens}` : ""
+      // eslint-disable-next-line no-console
+      console.log(
+        `[TTFT] total=${total}ms` +
+        ` dispatch=${dispatch}ms` +
+        ` sse=${sseLatency}ms` +
+        ` render=${render}ms` +
+        ` server=${serverProcess}ms` +
+        ` prefill=${prefill}ms${usageStr}`
+      )
+    }
+  }
 
   useEffect(() => {
     const id = window.requestAnimationFrame(() => {
@@ -133,8 +158,12 @@ function LatestMessageEditor(props: ComponentProps) {
     const controller = new AbortController()
     abortControllerRef.current = controller
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+    ttftRef.current.t1 = performance.now()
     try {
-      const body: Record<string, unknown> = { streamId: newStreamId, mode, settings: llmSettings, messages: messagesForStream, ...extraParams }
+      const body: Record<string, unknown> = {
+        streamId: newStreamId, mode, settings: llmSettings, messages: messagesForStream, ...extraParams,
+        clientTimestamps: { t0: ttftRef.current.t0, t1: ttftRef.current.t1 },
+      }
       const response = await fetch(`${streamingUrl}/api/stream`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: controller.signal,
       })
@@ -163,6 +192,16 @@ function LatestMessageEditor(props: ComponentProps) {
             const data = line.slice(5).trim()
             try {
               const parsed = JSON.parse(data)
+              if (ttftRef.current.t5 === undefined) {
+                ttftRef.current.t5 = performance.now()
+              }
+              if (eventType === "debug:ttft") {
+                if (typeof parsed.t2 === "number") ttftRef.current.t2 = parsed.t2
+                if (typeof parsed.t3 === "number") ttftRef.current.t3 = parsed.t3
+                if (typeof parsed.t4 === "number") ttftRef.current.t4 = parsed.t4
+                if (parsed.times) ttftRef.current.times = parsed.times
+                continue
+              }
               if (eventType === "token") {
                 const nextContent = parsed.fullContent ?? (accumulatedRef.current + (parsed.text ?? ""))
                 if (nextContent.length >= accumulatedRef.current.length) {
@@ -171,6 +210,11 @@ function LatestMessageEditor(props: ComponentProps) {
                 if (!isEditingRef.current) {
                   isStreamUpdateRef.current = true
                   setDraftContent(accumulatedRef.current)
+                  if (!firstTokenRenderedRef.current) {
+                    firstTokenRenderedRef.current = true
+                    ttftRef.current.t6 = performance.now()
+                    logTtft()
+                  }
                 }
                 const keywordCheckText = accumulatedRef.current.slice(keywordCheckStart)
                 if (keywordWords.length > 0 && containsBadWord(keywordCheckText, keywordWords)) {
@@ -264,6 +308,8 @@ function LatestMessageEditor(props: ComponentProps) {
   }, [isStreaming, streamId])
 
   const sendInlineEvent = useCallback((content: string, pos: number) => {
+    ttftRef.current = { t0: performance.now() }
+    firstTokenRenderedRef.current = false
     const isInterrupt = isStreaming
     if (isInterrupt && streamId) {
       fetch(`${streamingUrl}/api/abort`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ streamId }) }).catch(() => { })

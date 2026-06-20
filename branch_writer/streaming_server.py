@@ -6,6 +6,7 @@ import json
 import logging
 import socket
 import threading
+import time
 from collections.abc import Generator
 from typing import Any
 
@@ -71,19 +72,27 @@ def _stream_normal(
     messages: list[ChatMessage],
     settings: LlmSettings,
     stream_id: str,
+    ttft: dict[str, Any] | None = None,
 ) -> Generator[str, None, None]:
     """Stream a normal assistant response character by character."""
     logger.info("_stream_normal: streamId=%s, %d messages, model=%s", stream_id, len(messages), settings.model)
     abort = _get_abort_event(stream_id)
     full_content = ""
+    emitted_ttft_debug = False
     try:
+        if ttft is not None:
+            ttft["t3"] = time.monotonic()
         for chunk in _iter_chat_completion_chunks(
             api_messages=to_openai_messages(messages, system_prompt=settings.system_prompt),
             settings=settings,
+            ttft=ttft,
         ):
             if abort and abort.is_set():
                 yield _sse_event("aborted", {"streamId": stream_id})
                 return
+            if ttft is not None and not emitted_ttft_debug:
+                yield _sse_event("debug:ttft", dict(ttft))
+                emitted_ttft_debug = True
             full_content += chunk
             if abort and abort.is_set():
                 yield _sse_event("aborted", {"streamId": stream_id})
@@ -111,6 +120,7 @@ def _stream_intervention(
     action: str,
     settings: LlmSettings,
     stream_id: str,
+    ttft: dict[str, Any] | None = None,
 ) -> Generator[str, None, None]:
     """Stream an intervention continuation character by character."""
     base_content = assistant_prefix + insertion
@@ -120,17 +130,24 @@ def _stream_intervention(
     abort = _get_abort_event(stream_id)
     raw_continuation = ""
     last_clean_len = 0
+    emitted_ttft_debug = False
     try:
+        if ttft is not None:
+            ttft["t3"] = time.monotonic()
         for chunk in _iter_chat_completion_chunks(
             api_messages=[
                 *to_openai_messages(frozen_messages, system_prompt=settings.system_prompt),
                 {"role": "assistant", "content": prompt_prefix},
             ],
             settings=settings,
+            ttft=ttft,
         ):
             if abort and abort.is_set():
                 yield _sse_event("aborted", {"streamId": stream_id})
                 return
+            if ttft is not None and not emitted_ttft_debug:
+                yield _sse_event("debug:ttft", dict(ttft))
+                emitted_ttft_debug = True
             raw_continuation += chunk
             clean = strip_continuation_overlap(base_content, raw_continuation)
             full_content = base_content + clean
@@ -181,6 +198,13 @@ async def stream_endpoint(request: Request) -> Response:
 
     logger.info("stream_endpoint: streamId=%s, mode=%s, model=%s", stream_id, mode, settings_data.get("model"))
 
+    ttft: dict[str, Any] = {}
+    client_ts = body.get("clientTimestamps")
+    if isinstance(client_ts, dict):
+        ttft["t0"] = client_ts.get("t0")
+        ttft["t1"] = client_ts.get("t1")
+    ttft["t2"] = time.monotonic()
+
     try:
         settings = LlmSettings(**settings_data)
         messages = [ChatMessage(**m) for m in messages_data]
@@ -208,12 +232,14 @@ async def stream_endpoint(request: Request) -> Response:
             action=body.get("action", "regenerate_from_here"),
             settings=settings,
             stream_id=stream_id,
+            ttft=ttft,
         )
     else:
         generator = _stream_normal(
             messages=messages,
             settings=settings,
             stream_id=stream_id,
+            ttft=ttft,
         )
 
     return StreamingResponse(

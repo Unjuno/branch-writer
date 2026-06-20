@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -60,6 +61,7 @@ def _iter_chat_completion_chunks(
     *,
     api_messages: list[dict[str, str]],
     settings: LlmSettings,
+    ttft: dict[str, Any] | None = None,
 ) -> Iterator[str]:
     payload = _chat_payload(api_messages=api_messages, settings=settings, stream=True)
     url = _chat_completions_url(settings)
@@ -99,8 +101,21 @@ def _iter_chat_completion_chunks(
 
                 chunk = _extract_delta_content(data)
                 if chunk:
+                    if ttft is not None and "t4" not in ttft:
+                        ttft["t4"] = time.monotonic()
                     chunk_count += 1
                     yield chunk
+
+            if ttft is not None:
+                try:
+                    if isinstance(data, dict):
+                        usage = data.get("usage")
+                        if usage:
+                            if "times" not in ttft:
+                                ttft["times"] = {}
+                            ttft["times"]["usage"] = usage
+                except Exception:
+                    pass
     except LlmError:
         raise
     except httpx.TimeoutException as exc:
