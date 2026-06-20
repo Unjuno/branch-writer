@@ -382,15 +382,24 @@ function LatestMessageEditor(props: ComponentProps) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       if (selectedLine !== null) {
-        const eventType = isStreaming ? "inline_continue_pending" : "inline_continue"
-        Streamlit.setComponentValue({
-          type: eventType,
-          messageId,
-          selectionStart,
-          insertion: draftInsertion,
-          requestId: `${messageId}:inline:${selectionStart}:${Date.now()}`,
-        })
-        if (!isStreaming) {
+        if (isStreaming) {
+          abortControllerRef.current?.abort()
+          Streamlit.setComponentValue({
+            type: "inline_continue_interrupt",
+            messageId,
+            selectionStart,
+            insertion: draftInsertion,
+            currentContent: displayContent,
+            requestId: `${messageId}:interrupt:${selectionStart}:${Date.now()}`,
+          })
+        } else {
+          Streamlit.setComponentValue({
+            type: "inline_continue",
+            messageId,
+            selectionStart,
+            insertion: draftInsertion,
+            requestId: `${messageId}:inline:${selectionStart}:${Date.now()}`,
+          })
           setSelectedLine(null)
           setDraftInsertion("")
         }
@@ -399,7 +408,7 @@ function LatestMessageEditor(props: ComponentProps) {
       setSelectedLine(null)
       setDraftInsertion("")
     }
-  }, [selectedLine, selectionStart, draftInsertion, messageId, isStreaming])
+  }, [selectedLine, selectionStart, draftInsertion, messageId, isStreaming, displayContent])
 
   const canClick = !disabled
   const lines = useMemo(() => textWithCursor.split("\n"), [textWithCursor])
