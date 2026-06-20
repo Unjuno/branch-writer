@@ -490,6 +490,10 @@ def render_messages() -> None:
                     preview_content="",
                     messages_for_stream=messages_for_stream,
                     llm_settings=llm_settings_dict,
+                    keyword_filter={
+                        "enabled": st.session_state["kw_filter"]["enabled"],
+                        "words": st.session_state["kw_filter"]["words"],
+                    },
                     key=f"editor-{message.id}",
                 )
                 if event:
@@ -681,7 +685,10 @@ def _run_llm_validator(content: str) -> None:
             "---\n" + content
         )
     else:
-        prompt = prompt_template.replace("{text}", content)
+        if "{text}" in prompt_template:
+            prompt = prompt_template.replace("{text}", content)
+        else:
+            prompt = f"{prompt_template}\n\n---\n{content}"
 
     try:
         raw = generate_text(prompt, settings)
@@ -703,6 +710,10 @@ def _parse_llm_issues(raw: str) -> list[dict[str, Any]]:
     m = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw, re.DOTALL)
     if m:
         raw = m.group(1)
+    else:
+        m = re.search(r"\[[\s\S]*\]", raw)
+        if m:
+            raw = m.group(0)
     try:
         data = json.loads(raw)
         if isinstance(data, list):
@@ -755,6 +766,16 @@ def _run_validation_pipeline() -> bool:
     # 2) LLM validator (post-generation)
     if st.session_state["validator"]["enabled"] and check_text:
         _run_llm_validator(check_text)
+        if offset and st.session_state["validator"]["results"]:
+            st.session_state["validator"]["results"] = [
+                {
+                    **issue,
+                    "position": issue.get("position", 0) + offset
+                    if isinstance(issue.get("position", 0), int)
+                    else issue.get("position", 0),
+                }
+                for issue in st.session_state["validator"]["results"]
+            ]
 
     return False
 

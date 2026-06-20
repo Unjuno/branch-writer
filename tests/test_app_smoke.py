@@ -186,8 +186,8 @@ def _cursor_loop_state() -> dict:
 
 def test_handle_cursor_loop_position_does_not_modify_latest_content() -> None:
     """P0-2: preview-only — latest.content is never modified."""
-    from app import handle_cursor_loop_position, is_intervenable
     import app as app_module
+    from app import handle_cursor_loop_position
 
     assistant = ChatMessage(role="assistant", content="Hello world", status="complete")
     state = {
@@ -490,3 +490,80 @@ def test_llm_validator_cache_depends_on_prompt() -> None:
     finally:
         app_module.st = _orig_st
         app_module.generate_text = _orig_generate_text
+
+
+def test_llm_validator_custom_prompt_always_includes_text() -> None:
+    from app import _run_llm_validator
+    import app as app_module
+
+    state = {
+        "validator": {"enabled": True, "prompt": "JSONで問題点を返して", "results": None, "error": None},
+        "validation_cache": {"content_hash": "", "results": None, "error": None},
+        "llm_settings": type("S", (), {
+            "base_url": "http://localhost:1234/v1",
+            "model": "model-a",
+            "temperature": 0.7,
+            "max_tokens": 1024,
+            "context_window": 2048,
+            "request_timeout_seconds": 10,
+            "system_prompt": "",
+        })(),
+    }
+    st = type("st", (), {"session_state": state})()
+    _orig_st = app_module.st
+    _orig_generate_text = app_module.generate_text
+    calls: list[str] = []
+
+    def fake_generate_text(prompt: str, settings: object) -> str:
+        calls.append(prompt)
+        return "[]"
+
+    app_module.st = st
+    app_module.generate_text = fake_generate_text
+
+    try:
+        _run_llm_validator("検証対象本文")
+
+        assert "JSONで問題点を返して" in calls[0]
+        assert "検証対象本文" in calls[0]
+    finally:
+        app_module.st = _orig_st
+        app_module.generate_text = _orig_generate_text
+
+
+def test_parse_llm_issues_extracts_json_array_from_explanation() -> None:
+    from app import _parse_llm_issues
+
+    raw = '問題があります。\n[{"position": 3, "length": 2, "reason": "bad"}]\n以上です。'
+
+    assert _parse_llm_issues(raw) == [{"position": 3, "length": 2, "reason": "bad"}]
+
+
+def test_validation_pipeline_offsets_intervention_llm_positions() -> None:
+    from app import _run_validation_pipeline
+    import app as app_module
+
+    assistant = ChatMessage(role="assistant", content="prefix generated bad", status="streaming")
+    state = {
+        "messages": [assistant],
+        "streaming_intervention": {"base_content": "prefix "},
+        "kw_filter": {"enabled": False, "words": "", "max_retries": 5, "retry_count": 0},
+        "validator": {"enabled": True, "prompt": "", "results": None, "error": None},
+    }
+    st = type("st", (), {"session_state": state})()
+    _orig_st = app_module.st
+    _orig_run_llm_validator = app_module._run_llm_validator
+
+    def fake_run_llm_validator(content: str) -> None:
+        assert content == "generated bad"
+        state["validator"]["results"] = [{"position": 10, "length": 3, "reason": "bad"}]
+
+    app_module.st = st
+    app_module._run_llm_validator = fake_run_llm_validator
+
+    try:
+        assert _run_validation_pipeline() is False
+        assert state["validator"]["results"] == [{"position": 17, "length": 3, "reason": "bad"}]
+    finally:
+        app_module.st = _orig_st
+        app_module._run_llm_validator = _orig_run_llm_validator

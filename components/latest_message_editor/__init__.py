@@ -46,6 +46,7 @@ def latest_message_editor(
     preview_content: str = "",
     messages_for_stream: list[dict[str, str]] | None = None,
     llm_settings: dict[str, Any] | None = None,
+    keyword_filter: dict[str, Any] | None = None,
     key: str | None = None,
 ) -> dict[str, Any] | None:
     """Render the latest assistant editor and return an intervention event.
@@ -69,6 +70,7 @@ def latest_message_editor(
         previewContent=preview_content,
         messagesForStream=messages_for_stream,
         llmSettings=llm_settings,
+        keywordFilter=keyword_filter,
         default=None,
         key=key,
     )

@@ -9,6 +9,7 @@ type LatestMessageEditorArgs = {
   isStreaming?: boolean; interventionData?: Record<string, unknown> | null
   cursorLoopEnabled?: boolean; previewContent?: string
   messagesForStream?: Array<{ role: string; content: string; id: string }>
+  keywordFilter?: { enabled?: boolean; words?: string } | null
   llmSettings?: {
     base_url: string; api_key: string; model: string; temperature: number
     max_tokens: number; system_prompt: string; request_timeout_seconds: number; context_window: number
@@ -16,6 +17,15 @@ type LatestMessageEditorArgs = {
 }
 
 type StreamlitTheme = { base?: "light" | "dark"; primaryColor?: string; backgroundColor?: string; secondaryBackgroundColor?: string; textColor?: string; font?: string }
+
+function parseBadWords(words: string): string[] {
+  return words.split(",").map((word) => word.trim()).filter(Boolean)
+}
+
+function containsBadWord(text: string, words: string[]): boolean {
+  const textLower = text.toLowerCase()
+  return words.some((word) => textLower.includes(word.toLowerCase()))
+}
 
 function themeVars(theme?: StreamlitTheme): CSSProperties {
   const isDark = theme?.base === "dark"
@@ -51,6 +61,8 @@ function LatestMessageEditor(props: ComponentProps) {
   const isStreaming = Boolean(args.isStreaming)
   const interventionData = args.interventionData ?? null
   const messagesForStream = args.messagesForStream ?? []
+  const keywordFilter = args.keywordFilter ?? null
+  const keywordWords = keywordFilter?.enabled ? parseBadWords(keywordFilter.words ?? "") : []
   const llmSettings = args.llmSettings ?? null
 
   const [draftContent, setDraftContent] = useState(initialContent)
@@ -113,7 +125,10 @@ function LatestMessageEditor(props: ComponentProps) {
     doneSentRef.current = false
     failedStreamKeyRef.current = ""
     setStreamId(newStreamId)
-    accumulatedRef.current = mode === "intervention" ? (typeof extraParams.baseContent === "string" ? extraParams.baseContent : "") : ""
+    const baseContent = mode === "intervention" && typeof extraParams.baseContent === "string"
+      ? extraParams.baseContent : ""
+    const keywordCheckStart = baseContent.length
+    accumulatedRef.current = mode === "intervention" ? baseContent : ""
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -157,6 +172,17 @@ function LatestMessageEditor(props: ComponentProps) {
                   isStreamUpdateRef.current = true
                   setDraftContent(accumulatedRef.current)
                 }
+                const keywordCheckText = accumulatedRef.current.slice(keywordCheckStart)
+                if (keywordWords.length > 0 && containsBadWord(keywordCheckText, keywordWords)) {
+                  failedStreamKeyRef.current = ""
+                  if (!doneSentRef.current) {
+                    doneSentRef.current = true
+                    controller.abort()
+                    Streamlit.setComponentValue({ type: "streaming_done" as const, content: accumulatedRef.current, messageId, streamKey: thisStreamKey })
+                  }
+                  if (abortControllerRef.current === controller) setStreamId(null)
+                  return
+                }
               } else if (eventType === "done") {
                 const finalContent = parsed.fullContent ?? accumulatedRef.current
                 accumulatedRef.current = finalContent
@@ -199,7 +225,7 @@ function LatestMessageEditor(props: ComponentProps) {
       } else { failedStreamKeyRef.current = thisStreamKey }
       if (abortControllerRef.current === controller) setStreamId(null)
     } finally { reader?.releaseLock() }
-  }, [streamingUrl, generateStreamId, messageId, messagesForStream, llmSettings])
+  }, [streamingUrl, generateStreamId, messageId, messagesForStream, llmSettings, keywordWords])
 
   const interventionKeyRef = useRef("")
   const streamKeyFromData = (interventionData?.streamKey as string) || ""
