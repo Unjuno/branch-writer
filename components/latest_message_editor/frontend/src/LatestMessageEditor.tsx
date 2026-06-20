@@ -2,6 +2,7 @@ import React, { CSSProperties, useCallback, useEffect, useMemo, useRef, useState
 import { ComponentProps, Streamlit } from "streamlit-component-lib"
 
 type StreamingDoneEvent = { type: "streaming_done"; content: string; messageId: string; streamKey?: string }
+
 type StreamingErrorEvent = { type: "streaming_error"; message: string; content: string; messageId: string; streamKey?: string }
 
 type LatestMessageEditorArgs = {
@@ -67,12 +68,8 @@ function LatestMessageEditor(props: ComponentProps) {
   const messagesForStream = args.messagesForStream ?? []
   const llmSettings = args.llmSettings ?? null
 
-  const [displayContent, setDisplayContent] = useState(initialContent)
+  const [draftContent, setDraftContent] = useState(initialContent)
   const [streamId, setStreamId] = useState<string | null>(null)
-  const [editSnapshotContent, setEditSnapshotContent] = useState<string | null>(null)
-  const [selectedLine, setSelectedLine] = useState<number | null>(null)
-  const [selectionStart, setSelectionStart] = useState(0)
-  const [draftInsertion, setDraftInsertion] = useState("")
   const abortControllerRef = useRef<AbortController | null>(null)
   const accumulatedRef = useRef("")
   const doneSentRef = useRef(false)
@@ -80,28 +77,14 @@ function LatestMessageEditor(props: ComponentProps) {
   const failedStreamKeyRef = useRef("")
   const streamModeRef = useRef("normal")
   const isComposingRef = useRef(false)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const isEditingRef = useRef(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  const isActivelyStreaming = isStreaming && streamId !== null
-
-  const textWithCursor = useMemo(() => {
-    return isActivelyStreaming ? displayContent + "\u258c" : displayContent
-  }, [displayContent, isActivelyStreaming])
-
-  const renderContent = useMemo(() => {
-    if (selectedLine !== null && editSnapshotContent !== null) {
-      return editSnapshotContent
-    }
-    return textWithCursor
-  }, [selectedLine, editSnapshotContent, textWithCursor])
-
-  useEffect(() => { Streamlit.setFrameHeight() }, [renderContent, selectedLine])
+  useEffect(() => { Streamlit.setFrameHeight() }, [draftContent])
 
   useEffect(() => {
-    setDisplayContent(initialContent)
-    setEditSnapshotContent(null)
-    setSelectedLine(null)
-    setDraftInsertion("")
+    setDraftContent(initialContent)
+    isEditingRef.current = false
   }, [initialContent])
 
   const generateStreamId = useCallback(() => {
@@ -146,7 +129,7 @@ function LatestMessageEditor(props: ComponentProps) {
           failedStreamKeyRef.current = thisStreamKey
           if (!doneSentRef.current) {
             doneSentRef.current = true
-            Streamlit.setComponentValue({ type: "streaming_error", message: "Stream ended unexpectedly", content: accumulatedRef.current, messageId, streamKey: thisStreamKey })
+            Streamlit.setComponentValue({ type: "streaming_error" as const, message: "Stream ended unexpectedly", content: accumulatedRef.current, messageId, streamKey: thisStreamKey })
           }
           break
         }
@@ -162,15 +145,17 @@ function LatestMessageEditor(props: ComponentProps) {
               const parsed = JSON.parse(data)
               if (eventType === "token") {
                 accumulatedRef.current = parsed.fullContent ?? (accumulatedRef.current + (parsed.text ?? ""))
-                setDisplayContent(accumulatedRef.current)
+                if (!isEditingRef.current) {
+                  setDraftContent(accumulatedRef.current)
+                }
               } else if (eventType === "done") {
                 const finalContent = parsed.fullContent ?? accumulatedRef.current
                 accumulatedRef.current = finalContent
-                setDisplayContent(finalContent)
+                setDraftContent(finalContent)
                 failedStreamKeyRef.current = ""
                 if (!doneSentRef.current && finalContent.length > 0) {
                   doneSentRef.current = true
-                  Streamlit.setComponentValue({ type: "streaming_done", content: finalContent, messageId, streamKey: thisStreamKey })
+                  Streamlit.setComponentValue({ type: "streaming_done" as const, content: finalContent, messageId, streamKey: thisStreamKey })
                 }
                 if (abortControllerRef.current === controller) setStreamId(null)
                 return
@@ -178,7 +163,7 @@ function LatestMessageEditor(props: ComponentProps) {
                 failedStreamKeyRef.current = thisStreamKey
                 if (!doneSentRef.current) {
                   doneSentRef.current = true
-                  Streamlit.setComponentValue({ type: "streaming_error", message: parsed.message ?? "Unknown", content: accumulatedRef.current, messageId, streamKey: thisStreamKey })
+                  Streamlit.setComponentValue({ type: "streaming_error" as const, message: parsed.message ?? "Unknown", content: accumulatedRef.current, messageId, streamKey: thisStreamKey })
                 }
                 if (abortControllerRef.current === controller) setStreamId(null)
                 return
@@ -197,7 +182,7 @@ function LatestMessageEditor(props: ComponentProps) {
         failedStreamKeyRef.current = thisStreamKey
         if (!doneSentRef.current) {
           doneSentRef.current = true
-          Streamlit.setComponentValue({ type: "streaming_error", message: `Fetch error: ${(err as Error).message}`, content: accumulatedRef.current, messageId, streamKey: thisStreamKey })
+          Streamlit.setComponentValue({ type: "streaming_error" as const, message: `Fetch error: ${(err as Error).message}`, content: accumulatedRef.current, messageId, streamKey: thisStreamKey })
         }
       } else {
         failedStreamKeyRef.current = thisStreamKey
@@ -258,141 +243,81 @@ function LatestMessageEditor(props: ComponentProps) {
     }
   }, [isStreaming, streamId])
 
-  useEffect(() => {
-    if (selectedLine !== null && inputRef.current) {
-      inputRef.current.focus()
-    }
-  }, [selectedLine])
-
-  const clickLine = useCallback((lineIndex: number) => {
-    if (selectedLine === lineIndex) {
-      setSelectedLine(null)
-      setDraftInsertion("")
-      setEditSnapshotContent(null)
-      return
-    }
-    const snapshot = displayContent
-    const lines = snapshot.split("\n")
-    const codePointCounts = lines.map(l => Array.from(l).length)
-    let charPos = 0
-    for (let i = 0; i < lineIndex && i < lines.length; i++) {
-      charPos += codePointCounts[i] + 1
-    }
-    charPos = Math.min(charPos, Array.from(snapshot).length)
-    setEditSnapshotContent(snapshot)
-    setSelectionStart(charPos)
-    setSelectedLine(lineIndex)
-    setDraftInsertion("")
-  }, [displayContent, selectedLine])
-
   const sendIntervention = useCallback((action: "inline_continue" | "inline_continue_interrupt") => {
-    const base = editSnapshotContent ?? displayContent
-    const prefix = Array.from(base).slice(0, selectionStart).join("")
-    const currentContent = prefix + draftInsertion
-    const pos = Array.from(currentContent).length
-    if (action === "inline_continue_interrupt" && streamId) {
-      fetch(`${streamingUrl}/api/abort`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ streamId }),
-      }).catch(() => { })
-    }
-    abortControllerRef.current?.abort()
+    const ta = textareaRef.current
+    if (!ta) return
+    const pos = ta.selectionStart
+    const content = draftContent
     const requestId = `${messageId}:${action === "inline_continue" ? "inline" : "interrupt"}:${pos}:${Date.now()}`
-    Streamlit.setComponentValue({
-      type: action,
-      messageId,
-      selectionStart: pos,
-      currentContent,
-      insertion: "",
-      requestId,
-    })
-    setSelectedLine(null)
-    setDraftInsertion("")
-    setEditSnapshotContent(null)
-  }, [messageId, editSnapshotContent, displayContent, selectionStart, draftInsertion, streamId, streamingUrl])
+    Streamlit.setComponentValue({ type: action, messageId, selectionStart: pos, currentContent: content, insertion: "", requestId })
+    isEditingRef.current = false
+  }, [messageId, draftContent])
 
-  const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const native = e.nativeEvent as KeyboardEvent
     if (isComposingRef.current || native.isComposing || native.keyCode === 229) return
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      if (selectedLine !== null) {
-        sendIntervention(isStreaming ? "inline_continue_interrupt" : "inline_continue")
+      if (isStreaming) {
+        if (streamId) {
+          fetch(`${streamingUrl}/api/abort`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ streamId }),
+          }).catch(() => { })
+        }
+        abortControllerRef.current?.abort()
+        sendIntervention("inline_continue_interrupt")
+      } else {
+        sendIntervention("inline_continue")
       }
     } else if (e.key === "Escape") {
-      setSelectedLine(null)
-      setDraftInsertion("")
-      setEditSnapshotContent(null)
+      isEditingRef.current = false
+      setDraftContent(accumulatedRef.current)
     }
-  }, [selectedLine, isStreaming, sendIntervention])
+  }, [isStreaming, streamId, streamingUrl, sendIntervention])
 
-  const canClick = !disabled
-  const lines = useMemo(() => renderContent.split("\n"), [renderContent])
+  const cursorLineCount = useMemo(() => {
+    return Math.max(draftContent.split("\n").length, 1)
+  }, [draftContent])
 
   return (
     <div style={themeVars(theme)}>
-      <div style={{ position: "relative" }}>
-        {lines.map((line, i) => {
-          const isSelected = canClick && selectedLine === i
-          return (
-            <React.Fragment key={i}>
-              <div
-                style={{
-                  lineHeight: 1.7,
-                  cursor: canClick ? "pointer" : "default",
-                  background: isSelected ? "rgba(255,75,75,0.12)" : "transparent",
-                  borderLeft: isSelected ? "3px solid var(--bw-primary)" : "3px solid transparent",
-                  paddingLeft: isSelected ? 5 : 8,
-                  transition: "background 0.1s, border-color 0.1s",
-                  whiteSpace: "pre-wrap",
-                  wordWrap: "break-word",
-                  borderRadius: isSelected ? "2px 0 0 2px" : 0,
-                  position: "relative",
-                }}
-                onClick={() => canClick && clickLine(i)}
-              >
-                {line || "\u00a0"}
-              </div>
-              {isSelected && (
-                <div style={{ margin: "4px 0 8px 0", display: "flex", gap: 6, alignItems: "center" }}>
-                  <input
-                    ref={inputRef}
-                    type="text"
-                    value={draftInsertion}
-                    onChange={e => setDraftInsertion(e.target.value)}
-                    onKeyDown={handleInputKeyDown}
-                    onCompositionStart={() => { isComposingRef.current = true }}
-                    onCompositionEnd={() => { isComposingRef.current = false }}
-                    placeholder="\u258c\u258c Enter\u3067\u3053\u3053\u304b\u3089\u518d\u751f\u6210"
-                    style={{
-                      flex: 1,
-                      padding: "8px 12px",
-                      fontSize: "inherit",
-                      fontFamily: "inherit",
-                      color: "var(--bw-text)",
-                      background: "var(--bw-bg)",
-                      border: "1px solid var(--bw-border)",
-                      borderRadius: 4,
-                      outline: "none",
-                      boxSizing: "border-box",
-                    }}
-                  />
-                  {isStreaming && (
-                    <span style={{
-                      fontSize: "0.75rem",
-                      color: "var(--bw-muted)",
-                      whiteSpace: "nowrap",
-                    }}>
-                      \u26a0\ufe0f \u751f\u6210\u4e2d\u3067\u3059
-                    </span>
-                  )}
-                </div>
-              )}
-            </React.Fragment>
-          )
-        })}
-      </div>
+      <textarea
+        ref={textareaRef}
+        value={draftContent}
+        onChange={e => { isEditingRef.current = true; setDraftContent(e.target.value) }}
+        onFocus={() => { isEditingRef.current = true }}
+        onKeyDown={handleKeyDown}
+        onCompositionStart={() => { isComposingRef.current = true }}
+        onCompositionEnd={() => { isComposingRef.current = false }}
+        rows={cursorLineCount}
+        disabled={disabled}
+        placeholder={"\u258c\u258c Enter\u3067\u3053\u3053\u304b\u3089\u518d\u751f\u6210"}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          padding: "8px 12px",
+          fontSize: "inherit",
+          fontFamily: "inherit",
+          lineHeight: 1.7,
+          color: "var(--bw-text)",
+          background: "var(--bw-surface)",
+          border: "1px solid var(--bw-border)",
+          borderRadius: 4,
+          outline: "none",
+          resize: "none",
+          overflow: "hidden",
+          whiteSpace: "pre-wrap",
+          wordWrap: "break-word",
+        }}
+      />
+      {isStreaming && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: "0.85rem", color: "var(--bw-muted)" }}>
+          <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "var(--bw-primary)", animation: "bw-blink 0.9s step-end infinite" }} />
+          生成中 — Enter\u3067\u5272\u308a\u8fbc\u307f\u518d\u751f\u6210
+        </div>
+      )}
     </div>
   )
 }
