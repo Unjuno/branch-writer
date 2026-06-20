@@ -77,6 +77,7 @@ function LatestMessageEditor(props: ComponentProps) {
 
   const [draftContent, setDraftContent] = useState(initialContent)
   const [streamId, setStreamId] = useState<string | null>(null)
+  const [streamHeight, setStreamHeight] = useState<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const activeStreamIdRef = useRef("")
   const activeEpochRef = useRef(0)
@@ -87,7 +88,9 @@ function LatestMessageEditor(props: ComponentProps) {
   const streamModeRef = useRef("normal")
   const isComposingRef = useRef(false)
   const isEditingRef = useRef(false)
+  const isStreamingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const selectionRef = useRef<{ start: number; end: number } | null>(null)
   const isStreamUpdateRef = useRef(false)
   const ttftRef = useRef<TtftTiming>({})
@@ -179,10 +182,14 @@ function LatestMessageEditor(props: ComponentProps) {
     if (!isStreamUpdateRef.current) return
     isStreamUpdateRef.current = false
     const ta = textareaRef.current
-    if (ta && selectionRef.current && document.activeElement === ta) {
+    if (ta) {
+      let savedPos = selectionRef.current
+      if (!savedPos || document.activeElement !== ta) {
+        savedPos = { start: ta.value.length, end: ta.value.length }
+      }
       const clamped = {
-        start: Math.min(selectionRef.current.start, ta.value.length),
-        end: Math.min(selectionRef.current.end, ta.value.length),
+        start: Math.min(savedPos.start, ta.value.length),
+        end: Math.min(savedPos.end, ta.value.length),
       }
       if (ta.selectionStart !== clamped.start || ta.selectionEnd !== clamped.end) {
         ta.setSelectionRange(clamped.start, clamped.end)
@@ -193,13 +200,21 @@ function LatestMessageEditor(props: ComponentProps) {
   useLayoutEffect(() => {
     const ta = textareaRef.current
     if (!ta) return
+    if (isStreamingRef.current) {
+      if (streamHeight !== null) {
+        ta.style.height = `${streamHeight}px`
+        ta.style.overflowY = "auto"
+      }
+      return
+    }
     ta.style.height = "auto"
     ta.style.height = `${ta.scrollHeight}px`
+    ta.style.overflowY = "hidden"
     const frameId = window.requestAnimationFrame(() => {
       Streamlit.setFrameHeight()
     })
     return () => window.cancelAnimationFrame(frameId)
-  }, [draftContent])
+  }, [draftContent, streamHeight])
 
   const generateStreamId = useCallback(() => `${messageId}:stream:${Date.now()}:${Math.random().toString(36).slice(2)}`, [messageId])
 
@@ -241,6 +256,12 @@ function LatestMessageEditor(props: ComponentProps) {
       ttftRef.current.t0 = performance.now()
     }
     ttftRef.current.t1 = performance.now()
+    firstTokenRenderedRef.current = false
+    isStreamingRef.current = true
+    if (textareaRef.current) {
+      const h = textareaRef.current.scrollHeight
+      setStreamHeight(h)
+    }
     try {
       const body: Record<string, unknown> = {
         streamId: newStreamId, mode, settings: llmSettings, messages: messagesForStream, ...extraParams,
@@ -359,7 +380,11 @@ function LatestMessageEditor(props: ComponentProps) {
         }
       } else { failedStreamKeyRef.current = thisStreamKey }
       if (abortControllerRef.current === controller) setStreamId(null)
-    } finally { reader?.releaseLock() }
+    } finally {
+      isStreamingRef.current = false
+      setStreamHeight(null)
+      reader?.releaseLock()
+    }
   }, [streamingUrl, generateStreamId, messageId, messagesForStream, llmSettings, keywordWords])
 
   const interventionKeyRef = useRef("")
@@ -401,6 +426,7 @@ function LatestMessageEditor(props: ComponentProps) {
   const sendInlineEvent = useCallback((content: string, pos: number) => {
     ttftRef.current = { t0: performance.now() }
     firstTokenRenderedRef.current = false
+    selectionRef.current = { start: pos, end: pos }
     const isInterrupt = isStreaming
     if (isInterrupt && streamId) {
       fetch(`${streamingUrl}/api/abort`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ streamId }) }).catch(() => { })
