@@ -84,12 +84,11 @@ def _stream_normal(
             if abort and abort.is_set():
                 yield _sse_event("aborted", {"streamId": stream_id})
                 return
-            for char in chunk:
-                if abort and abort.is_set():
-                    yield _sse_event("aborted", {"streamId": stream_id})
-                    return
-                full_content += char
-                yield _sse_event("token", {"text": char, "streamId": stream_id})
+            full_content += chunk
+            if abort and abort.is_set():
+                yield _sse_event("aborted", {"streamId": stream_id})
+                return
+            yield _sse_event("token", {"fullContent": full_content, "streamId": stream_id})
         logger.info("_stream_normal: done, streamId=%s, %d chars", stream_id, len(full_content))
         yield _sse_event("done", {"streamId": stream_id, "fullContent": full_content})
     except LlmError as exc:
