@@ -49,9 +49,15 @@ The goal is not to offload writing entirely to AI, but to **pilot the generation
 
 ### Prerequisites
 
-- **Python 3.11+**
-- **Ollama** ([install](https://ollama.com/download)) or any OpenAI-compatible endpoint (LM Studio, llama.cpp server, vLLM, SGLang)
-- A model pulled locally (e.g. `ollama pull llama3.2:1b`)
+| Requirement | Notes |
+|-------------|-------|
+| **Python 3.11+** | |
+| **Node.js 20+** | Only needed if you modify the React frontend |
+| **Ollama** | [Install](https://ollama.com/download) — or any OpenAI-compatible endpoint (LM Studio, llama.cpp server, vLLM, SGLang) |
+| **A model** | Pull one, e.g. `ollama pull llama3.2:1b` |
+
+The app connects to `http://localhost:11434/v1` (Ollama's default) automatically.  
+Make sure Ollama is **running** before launching the app (`ollama serve`).
 
 ### Install & Run
 
@@ -64,9 +70,9 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-That's it. The app opens in your browser at `http://localhost:8501`.
+The app opens at **`http://localhost:8501`**. Select your model from the sidebar and start chatting.
 
-> **Note for frontend development**: The React component (`components/latest_message_editor/frontend/`) requires Node 20+ and `npm run build` if you modify it. See [development docs](docs/development.md).
+> **Frontend development**: If you modify the React component (`components/latest_message_editor/frontend/`), run `npm install && npm run build` first, or set `BRANCH_WRITER_COMPONENT_URL` for hot-reload. See [development docs](docs/development.md).
 
 ### One-Click Setup
 
@@ -78,6 +84,20 @@ That's it. The app opens in your browser at `http://localhost:8501`.
 Both scripts handle cloning, venv creation, dependency installation, Ollama setup, model pull, and app launch.
 
 ---
+
+## Runtime Requirements
+
+The app does not bundle any LLM — it relies on an external inference engine running on your machine (or network).
+
+| Backend | Default URL | Setup |
+|---------|-------------|-------|
+| **Ollama** (recommended) | `http://localhost:11434` | [Download](https://ollama.com/download), then `ollama pull llama3.2:1b` |
+| **LM Studio** | `http://localhost:1234` | Enable "CORS" and "Serve" in LM Studio settings |
+| **llama.cpp server** | `http://localhost:8080` | Run `llama-server -m model.gguf` |
+| **vLLM** | Custom | Start `vllm serve` with your model |
+| **SGLang** | Custom | Start `sglang.launch_server` with your model |
+
+Ollama is the simplest path — install it, pull a model, and the app finds it automatically.
 
 ## How It Works
 

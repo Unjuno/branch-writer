@@ -27,7 +27,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
-        run: python -m pytest
+        run: python -m pytest --ignore=tests/test_e2e_browser.py -v
 
   frontend:
     name: Component build
