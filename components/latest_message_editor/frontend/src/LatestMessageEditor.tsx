@@ -41,6 +41,14 @@ function codePointOffsetFromDomOffset(text: string, domOffset: number): number {
   return count
 }
 
+function splitDisplayUnits(text: string): string[] {
+  const segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null
+  if (!segmenter) return Array.from(text)
+  return Array.from(segmenter.segment(text), segment => segment.segment)
+}
+
 function LatestMessageEditor(props: ComponentProps) {
   const args = props.args as LatestMessageEditorArgs
   const theme = (props as ComponentProps & { theme?: StreamlitTheme }).theme
@@ -69,6 +77,8 @@ function LatestMessageEditor(props: ComponentProps) {
   const typewriterTimerRef = useRef<number | null>(null)
   const targetContentRef = useRef(initialContent)
   const displayedContentRef = useRef(initialContent)
+  const displayedUnitsRef = useRef(splitDisplayUnits(initialContent))
+  const targetUnitsRef = useRef(splitDisplayUnits(initialContent))
 
   useEffect(() => { Streamlit.setFrameHeight() }, [draftContent])
 
@@ -83,6 +93,7 @@ function LatestMessageEditor(props: ComponentProps) {
 
   const animateToTarget = useCallback((target: string, instant = false) => {
     targetContentRef.current = target
+    targetUnitsRef.current = splitDisplayUnits(target)
     if (typewriterTimerRef.current !== null) {
       window.clearInterval(typewriterTimerRef.current)
       typewriterTimerRef.current = null
@@ -90,6 +101,7 @@ function LatestMessageEditor(props: ComponentProps) {
 
     if (instant) {
       displayedContentRef.current = target
+      displayedUnitsRef.current = targetUnitsRef.current.slice()
       isStreamUpdateRef.current = true
       setDraftContent(target)
       return
@@ -98,8 +110,11 @@ function LatestMessageEditor(props: ComponentProps) {
     if (displayedContentRef.current === target) return
     if (!target.startsWith(displayedContentRef.current)) {
       displayedContentRef.current = draftContent
+      displayedUnitsRef.current = splitDisplayUnits(draftContent)
       if (!target.startsWith(displayedContentRef.current)) {
-        displayedContentRef.current = target.slice(0, Math.max(0, displayedContentRef.current.length))
+        const targetUnits = targetUnitsRef.current
+        displayedUnitsRef.current = targetUnits.slice(0, Math.min(displayedUnitsRef.current.length, targetUnits.length))
+        displayedContentRef.current = displayedUnitsRef.current.join("")
       }
     }
 
@@ -121,10 +136,14 @@ function LatestMessageEditor(props: ComponentProps) {
         return
       }
 
-      if (nextTarget.startsWith(displayedContentRef.current)) {
-        displayedContentRef.current = nextTarget.slice(0, displayedContentRef.current.length + 1)
+      const currentUnits = displayedUnitsRef.current
+      const targetUnits = targetUnitsRef.current
+      if (targetUnits.length > currentUnits.length && targetUnits.join("").startsWith(displayedContentRef.current)) {
+        displayedUnitsRef.current = targetUnits.slice(0, currentUnits.length + 1)
+        displayedContentRef.current = displayedUnitsRef.current.join("")
       } else {
         displayedContentRef.current = nextTarget
+        displayedUnitsRef.current = targetUnits.slice()
       }
 
       isStreamUpdateRef.current = true

@@ -114,7 +114,7 @@ def _stream_intervention(
 ) -> Generator[str, None, None]:
     """Stream an intervention continuation character by character."""
     base_content = assistant_prefix + insertion
-    prompt_prefix = generation_prefix + insertion if generation_prefix else base_content
+    prompt_prefix = generation_prefix if generation_prefix else base_content
     logger.info("_stream_intervention: streamId=%s, action=%s, selectionStart=%d, base=%d chars",
                 stream_id, action, selection_start, len(base_content))
     abort = _active_streams.get(stream_id)
@@ -189,8 +189,8 @@ async def stream_endpoint(request: Request) -> StreamingResponse:
 
     if mode in ("intervention", "cursor_loop"):
         frozen_data = body.get("frozenMessages", [])
-            frozen_messages = [ChatMessage(**m) for m in frozen_data]
-            generator = _stream_intervention(
+        frozen_messages = [ChatMessage(**m) for m in frozen_data]
+        generator = _stream_intervention(
             frozen_messages=frozen_messages,
             assistant_prefix=body.get("assistantPrefix", ""),
             generation_prefix=body.get("generationPrefix", ""),
