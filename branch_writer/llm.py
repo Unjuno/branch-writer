@@ -47,13 +47,15 @@ def _chat_payload(
     settings: LlmSettings,
     stream: bool,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "model": settings.model,
         "messages": api_messages,
         "temperature": settings.temperature,
         "max_tokens": settings.max_tokens,
         "stream": stream,
     }
+    payload["keep_alive"] = "5m"
+    return payload
 
 
 

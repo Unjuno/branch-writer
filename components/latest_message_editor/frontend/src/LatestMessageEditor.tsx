@@ -92,6 +92,8 @@ function LatestMessageEditor(props: ComponentProps) {
   const isStreamUpdateRef = useRef(false)
   const ttftRef = useRef<TtftTiming>({})
   const firstTokenRenderedRef = useRef(false)
+  const pendingContentRef = useRef<string | null>(null)
+  const coalesceRafRef = useRef<number | null>(null)
 
   function getTtftSummary(): Record<string, number | undefined> {
     const t = ttftRef.current
@@ -108,6 +110,32 @@ function LatestMessageEditor(props: ComponentProps) {
       s.completion_tokens = usage.completion_tokens
     }
     return s
+  }
+
+  function scheduleCoalesce(content: string) {
+    pendingContentRef.current = content
+    if (coalesceRafRef.current === null) {
+      coalesceRafRef.current = requestAnimationFrame(() => {
+        coalesceRafRef.current = null
+        if (pendingContentRef.current !== null) {
+          isStreamUpdateRef.current = true
+          setDraftContent(pendingContentRef.current)
+          pendingContentRef.current = null
+        }
+      })
+    }
+  }
+
+  function flushCoalesce() {
+    if (coalesceRafRef.current !== null) {
+      cancelAnimationFrame(coalesceRafRef.current)
+      coalesceRafRef.current = null
+    }
+    if (pendingContentRef.current !== null) {
+      isStreamUpdateRef.current = true
+      setDraftContent(pendingContentRef.current)
+      pendingContentRef.current = null
+    }
   }
 
   function logTtft() {
@@ -204,6 +232,11 @@ function LatestMessageEditor(props: ComponentProps) {
     const controller = new AbortController()
     abortControllerRef.current = controller
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+    pendingContentRef.current = null
+    if (coalesceRafRef.current !== null) {
+      cancelAnimationFrame(coalesceRafRef.current)
+      coalesceRafRef.current = null
+    }
     if (ttftRef.current.t0 === undefined) {
       ttftRef.current.t0 = performance.now()
     }
@@ -261,13 +294,15 @@ function LatestMessageEditor(props: ComponentProps) {
                   accumulatedRef.current = nextContent
                 }
                 if (!isEditingRef.current) {
-                  isStreamUpdateRef.current = true
                   if (!firstTokenRenderedRef.current) {
                     firstTokenRenderedRef.current = true
                     ttftRef.current.t6 = performance.now()
                     logTtft()
+                    isStreamUpdateRef.current = true
+                    setDraftContent(accumulatedRef.current)
+                  } else {
+                    scheduleCoalesce(accumulatedRef.current)
                   }
-                  setDraftContent(accumulatedRef.current)
                 }
                 const keywordCheckText = accumulatedRef.current.slice(keywordCheckStart)
                 if (keywordWords.length > 0 && containsBadWord(keywordCheckText, keywordWords)) {
@@ -285,6 +320,7 @@ function LatestMessageEditor(props: ComponentProps) {
                 const finalContent = parsed.fullContent ?? accumulatedRef.current
                 accumulatedRef.current = finalContent
                 if (!isEditingRef.current) {
+                  flushCoalesce()
                   isStreamUpdateRef.current = true
                   setDraftContent(finalContent)
                 }
