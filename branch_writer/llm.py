@@ -83,6 +83,7 @@ def _iter_chat_completion_chunks(
                 raise LlmError(f"LLM HTTP {response.status_code}: {body}")
 
             chunk_count = 0
+            last_data: dict[str, Any] | None = None
             for line in response.iter_lines():
                 if not line:
                     continue
@@ -99,6 +100,8 @@ def _iter_chat_completion_chunks(
                 except json.JSONDecodeError:
                     continue
 
+                if isinstance(data, dict):
+                    last_data = data
                 chunk = _extract_delta_content(data)
                 if chunk:
                     if ttft is not None and "t4" not in ttft:
@@ -108,12 +111,11 @@ def _iter_chat_completion_chunks(
 
             if ttft is not None:
                 try:
-                    if isinstance(data, dict):
-                        usage = data.get("usage")
-                        if usage:
-                            if "times" not in ttft:
-                                ttft["times"] = {}
-                            ttft["times"]["usage"] = usage
+                    usage = last_data.get("usage") if last_data else None
+                    if usage:
+                        times = ttft.setdefault("times", {})
+                        if isinstance(times, dict):
+                            times["usage"] = usage
                 except Exception:
                     pass
     except LlmError:

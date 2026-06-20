@@ -184,6 +184,27 @@ def render_context_usage() -> None:
         st.sidebar.caption("チャットをクリアするか、Max Tokens を減らして空きを確保してください。")
 
 
+def render_ttft_display() -> None:
+    last_ttft = st.session_state.get("last_ttft")
+    if not isinstance(last_ttft, dict) or not last_ttft:
+        return
+    st.sidebar.divider()
+    st.sidebar.caption("TTFT")
+    cols = st.sidebar.columns(4)
+    total = last_ttft.get("total_ms")
+    prefill = last_ttft.get("prefill_ms")
+    server = last_ttft.get("server_ms")
+    render = last_ttft.get("render_ms")
+    if total is not None:
+        cols[0].metric("Total", f"{total:.0f}ms")
+    if prefill is not None:
+        cols[1].metric("Prefill", f"{prefill:.0f}ms")
+    if server is not None:
+        cols[2].metric("Server", f"{server:.0f}ms")
+    if render is not None:
+        cols[3].metric("Render", f"{render:.0f}ms")
+
+
 def render_sidebar() -> None:
     settings: LlmSettings = st.session_state["llm_settings"]
     is_generating = bool(st.session_state["is_generating"])
@@ -269,6 +290,8 @@ def render_sidebar() -> None:
     )
 
     render_context_usage()
+
+    render_ttft_display()
 
     st.sidebar.divider()
     st.session_state["render_message_limit"] = st.sidebar.number_input(
@@ -885,6 +908,11 @@ def handle_streaming_complete(event: dict[str, Any]) -> bool:
         st.session_state["streaming_intervention"] = None
         logger.info("handle_streaming_complete: finalized intervention, is_generating=False")
 
+    ttft = event.get("ttft")
+    if isinstance(ttft, dict) and ttft:
+        st.session_state["last_ttft"] = ttft
+        logger.info("handle_streaming_complete: TTFT=%s", ttft)
+
     return False
 
 
@@ -970,8 +998,10 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
         return True
 
     insertion = event.get("insertion") or ""
-    before_content = latest.content
-    draft_content = event.get("currentContent", before_content)
+    draft_content = event.get("currentContent", latest.content)
+    if not isinstance(draft_content, str):
+        draft_content = latest.content
+    before_content = draft_content
 
     try:
         validate_selection_start(draft_content, selection_start)

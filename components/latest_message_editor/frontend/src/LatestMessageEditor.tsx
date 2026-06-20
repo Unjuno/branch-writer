@@ -17,6 +17,16 @@ type LatestMessageEditorArgs = {
 }
 
 type StreamlitTheme = { base?: "light" | "dark"; primaryColor?: string; backgroundColor?: string; secondaryBackgroundColor?: string; textColor?: string; font?: string }
+type TtftTiming = {
+  t0?: number
+  t1?: number
+  t2?: number
+  t3?: number
+  t4?: number
+  t5?: number
+  t6?: number
+  times?: any
+}
 
 function parseBadWords(words: string): string[] {
   return words.split(",").map((word) => word.trim()).filter(Boolean)
@@ -68,6 +78,8 @@ function LatestMessageEditor(props: ComponentProps) {
   const [draftContent, setDraftContent] = useState(initialContent)
   const [streamId, setStreamId] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const activeStreamIdRef = useRef("")
+  const activeEpochRef = useRef(0)
   const accumulatedRef = useRef(initialContent)
   const doneSentRef = useRef(false)
   const completedRef = useRef(false)
@@ -78,8 +90,25 @@ function LatestMessageEditor(props: ComponentProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const selectionRef = useRef<{ start: number; end: number } | null>(null)
   const isStreamUpdateRef = useRef(false)
-  const ttftRef = useRef<Record<string, number | undefined>>({})
+  const ttftRef = useRef<TtftTiming>({})
   const firstTokenRenderedRef = useRef(false)
+
+  function getTtftSummary(): Record<string, number | undefined> {
+    const t = ttftRef.current
+    const s: Record<string, number | undefined> = {}
+    if (t.t0 !== undefined && t.t6 !== undefined) s.total_ms = +(t.t6 - t.t0).toFixed(1)
+    if (t.t0 !== undefined && t.t1 !== undefined) s.dispatch_ms = +(t.t1 - t.t0).toFixed(1)
+    if (t.t1 !== undefined && t.t5 !== undefined) s.sse_ms = +(t.t5 - t.t1).toFixed(1)
+    if (t.t5 !== undefined && t.t6 !== undefined) s.render_ms = +(t.t6 - t.t5).toFixed(1)
+    if (t.t2 !== undefined && t.t3 !== undefined) s.server_ms = +((t.t3 - t.t2) * 1000).toFixed(1)
+    if (t.t3 !== undefined && t.t4 !== undefined) s.prefill_ms = +((t.t4 - t.t3) * 1000).toFixed(1)
+    const usage = t.times ? (t.times as any)?.usage : null
+    if (usage) {
+      s.prompt_tokens = usage.prompt_tokens
+      s.completion_tokens = usage.completion_tokens
+    }
+    return s
+  }
 
   function logTtft() {
     const t = ttftRef.current
@@ -142,13 +171,24 @@ function LatestMessageEditor(props: ComponentProps) {
 
   const generateStreamId = useCallback(() => `${messageId}:stream:${Date.now()}:${Math.random().toString(36).slice(2)}`, [messageId])
 
+  const nextEpoch = useCallback(() => {
+    activeEpochRef.current += 1
+    return activeEpochRef.current
+  }, [])
+
+  const isCurrentEvent = useCallback((parsed: Record<string, unknown>) => {
+    return parsed.streamId === activeStreamIdRef.current && parsed.epoch === activeEpochRef.current
+  }, [])
+
   const startStreaming = useCallback(async (mode: string, extraParams: Record<string, unknown> = {}) => {
     if (!streamingUrl || !llmSettings) return
     const newStreamId = generateStreamId()
+    const epoch = nextEpoch()
     streamModeRef.current = mode
     const thisStreamKey = (extraParams.streamKey as string) || `${messageId}:${mode}:${extraParams.streamKeySuffix ?? ""}`
     doneSentRef.current = false
     failedStreamKeyRef.current = ""
+    activeStreamIdRef.current = newStreamId
     setStreamId(newStreamId)
     const baseContent = mode === "intervention" && typeof extraParams.baseContent === "string"
       ? extraParams.baseContent : ""
@@ -158,10 +198,14 @@ function LatestMessageEditor(props: ComponentProps) {
     const controller = new AbortController()
     abortControllerRef.current = controller
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+    if (ttftRef.current.t0 === undefined) {
+      ttftRef.current.t0 = performance.now()
+    }
     ttftRef.current.t1 = performance.now()
     try {
       const body: Record<string, unknown> = {
         streamId: newStreamId, mode, settings: llmSettings, messages: messagesForStream, ...extraParams,
+        epoch,
         clientTimestamps: { t0: ttftRef.current.t0, t1: ttftRef.current.t1 },
       }
       const response = await fetch(`${streamingUrl}/api/stream`, {
@@ -192,6 +236,9 @@ function LatestMessageEditor(props: ComponentProps) {
             const data = line.slice(5).trim()
             try {
               const parsed = JSON.parse(data)
+              if (!isCurrentEvent(parsed)) {
+                continue
+              }
               if (ttftRef.current.t5 === undefined) {
                 ttftRef.current.t5 = performance.now()
               }
@@ -209,12 +256,12 @@ function LatestMessageEditor(props: ComponentProps) {
                 }
                 if (!isEditingRef.current) {
                   isStreamUpdateRef.current = true
-                  setDraftContent(accumulatedRef.current)
                   if (!firstTokenRenderedRef.current) {
                     firstTokenRenderedRef.current = true
                     ttftRef.current.t6 = performance.now()
                     logTtft()
                   }
+                  setDraftContent(accumulatedRef.current)
                 }
                 const keywordCheckText = accumulatedRef.current.slice(keywordCheckStart)
                 if (keywordWords.length > 0 && containsBadWord(keywordCheckText, keywordWords)) {
@@ -222,7 +269,8 @@ function LatestMessageEditor(props: ComponentProps) {
                   if (!doneSentRef.current) {
                     doneSentRef.current = true
                     controller.abort()
-                    Streamlit.setComponentValue({ type: "streaming_done" as const, content: accumulatedRef.current, messageId, streamKey: thisStreamKey })
+                    const ttft = getTtftSummary()
+                    Streamlit.setComponentValue({ type: "streaming_done" as const, content: accumulatedRef.current, messageId, streamKey: thisStreamKey, ttft: Object.keys(ttft).length > 0 ? ttft : undefined })
                   }
                   if (abortControllerRef.current === controller) setStreamId(null)
                   return
@@ -237,7 +285,8 @@ function LatestMessageEditor(props: ComponentProps) {
                 failedStreamKeyRef.current = ""
                 if (!doneSentRef.current && !completedRef.current && finalContent.length > 0) {
                   doneSentRef.current = true
-                  Streamlit.setComponentValue({ type: "streaming_done" as const, content: finalContent, messageId, streamKey: thisStreamKey })
+                  const ttft = getTtftSummary()
+                  Streamlit.setComponentValue({ type: "streaming_done" as const, content: finalContent, messageId, streamKey: thisStreamKey, ttft: Object.keys(ttft).length > 0 ? ttft : undefined })
                 }
                 if (abortControllerRef.current === controller) setStreamId(null)
                 return
@@ -318,9 +367,9 @@ function LatestMessageEditor(props: ComponentProps) {
     const type = isInterrupt ? "inline_continue_interrupt" : "inline_continue"
     const pfx = isInterrupt ? "interrupt" : "inline"
     Streamlit.setComponentValue({
-      type, messageId, currentContent: content, selectionStart: pos, insertion: "",
-      requestId: `${messageId}:${pfx}:${pos}:${Date.now()}`,
-    })
+        type, messageId, currentContent: content, selectionStart: pos, insertion: "",
+        requestId: `${messageId}:${pfx}:${pos}:${Date.now()}`,
+      })
     isEditingRef.current = false
   }, [isStreaming, streamId, streamingUrl, messageId])
 
@@ -351,6 +400,12 @@ function LatestMessageEditor(props: ComponentProps) {
         ref={textareaRef}
         value={draftContent}
         onChange={e => {
+          if (isStreaming && streamId) {
+            activeStreamIdRef.current = ""
+            activeEpochRef.current += 1
+            abortControllerRef.current?.abort()
+            setStreamId(null)
+          }
           isEditingRef.current = true
           const ta = e.currentTarget
           selectionRef.current = { start: ta.selectionStart, end: ta.selectionEnd }

@@ -72,6 +72,7 @@ def _stream_normal(
     messages: list[ChatMessage],
     settings: LlmSettings,
     stream_id: str,
+    stream_epoch: int,
     ttft: dict[str, Any] | None = None,
 ) -> Generator[str, None, None]:
     """Stream a normal assistant response character by character."""
@@ -88,24 +89,27 @@ def _stream_normal(
             ttft=ttft,
         ):
             if abort and abort.is_set():
-                yield _sse_event("aborted", {"streamId": stream_id})
+                yield _sse_event("aborted", {"streamId": stream_id, "epoch": stream_epoch})
                 return
             if ttft is not None and not emitted_ttft_debug:
-                yield _sse_event("debug:ttft", dict(ttft))
+                payload = dict(ttft)
+                payload["streamId"] = stream_id
+                payload["epoch"] = stream_epoch
+                yield _sse_event("debug:ttft", payload)
                 emitted_ttft_debug = True
             full_content += chunk
             if abort and abort.is_set():
-                yield _sse_event("aborted", {"streamId": stream_id})
+                yield _sse_event("aborted", {"streamId": stream_id, "epoch": stream_epoch})
                 return
-            yield _sse_event("token", {"fullContent": full_content, "streamId": stream_id})
+            yield _sse_event("token", {"fullContent": full_content, "streamId": stream_id, "epoch": stream_epoch})
         logger.info("_stream_normal: done, streamId=%s, %d chars", stream_id, len(full_content))
-        yield _sse_event("done", {"streamId": stream_id, "fullContent": full_content})
+        yield _sse_event("done", {"streamId": stream_id, "epoch": stream_epoch, "fullContent": full_content})
     except LlmError as exc:
         logger.error("_stream_normal: LlmError streamId=%s: %s", stream_id, exc)
-        yield _sse_event("error", {"message": str(exc), "streamId": stream_id})
+        yield _sse_event("error", {"message": str(exc), "streamId": stream_id, "epoch": stream_epoch})
     except Exception as exc:
         logger.error("_stream_normal: Unexpected error streamId=%s: %s", stream_id, exc)
-        yield _sse_event("error", {"message": f"Unexpected error: {exc}", "streamId": stream_id})
+        yield _sse_event("error", {"message": f"Unexpected error: {exc}", "streamId": stream_id, "epoch": stream_epoch})
     finally:
         _unregister_stream(stream_id)
 
@@ -120,6 +124,7 @@ def _stream_intervention(
     action: str,
     settings: LlmSettings,
     stream_id: str,
+    stream_epoch: int,
     ttft: dict[str, Any] | None = None,
 ) -> Generator[str, None, None]:
     """Stream an intervention continuation character by character."""
@@ -143,10 +148,13 @@ def _stream_intervention(
             ttft=ttft,
         ):
             if abort and abort.is_set():
-                yield _sse_event("aborted", {"streamId": stream_id})
+                yield _sse_event("aborted", {"streamId": stream_id, "epoch": stream_epoch, "streamKey": stream_id})
                 return
             if ttft is not None and not emitted_ttft_debug:
-                yield _sse_event("debug:ttft", dict(ttft))
+                payload = dict(ttft)
+                payload["streamId"] = stream_id
+                payload["epoch"] = stream_epoch
+                yield _sse_event("debug:ttft", payload)
                 emitted_ttft_debug = True
             raw_continuation += chunk
             clean = strip_continuation_overlap(base_content, raw_continuation)
@@ -159,6 +167,9 @@ def _stream_intervention(
                 "token",
                 {
                     "fullContent": full_content,
+                    "streamId": stream_id,
+                    "epoch": stream_epoch,
+                    "streamKey": stream_id,
                     "action": action,
                     "selectionStart": selection_start,
                     "insertion": insertion,
@@ -171,6 +182,8 @@ def _stream_intervention(
             "done",
             {
                 "streamId": stream_id,
+                "epoch": stream_epoch,
+                "streamKey": stream_id,
                 "fullContent": full_content,
                 "action": action,
                 "selectionStart": selection_start,
@@ -179,10 +192,10 @@ def _stream_intervention(
         )
     except LlmError as exc:
         logger.error("_stream_intervention: LlmError streamId=%s: %s", stream_id, exc)
-        yield _sse_event("error", {"message": str(exc), "streamId": stream_id})
+        yield _sse_event("error", {"message": str(exc), "streamId": stream_id, "epoch": stream_epoch, "streamKey": stream_id})
     except Exception as exc:
         logger.error("_stream_intervention: Unexpected error streamId=%s: %s", stream_id, exc)
-        yield _sse_event("error", {"message": f"Unexpected error: {exc}", "streamId": stream_id})
+        yield _sse_event("error", {"message": f"Unexpected error: {exc}", "streamId": stream_id, "epoch": stream_epoch, "streamKey": stream_id})
     finally:
         _unregister_stream(stream_id)
 
@@ -192,6 +205,7 @@ async def stream_endpoint(request: Request) -> Response:
     body = await request.json()
 
     stream_id = body.get("streamId", "")
+    stream_epoch = int(body.get("epoch", 0) or 0)
     mode = body.get("mode", "normal")
     settings_data = body.get("settings", {})
     messages_data = body.get("messages", [])
@@ -232,6 +246,7 @@ async def stream_endpoint(request: Request) -> Response:
             action=body.get("action", "regenerate_from_here"),
             settings=settings,
             stream_id=stream_id,
+            stream_epoch=stream_epoch,
             ttft=ttft,
         )
     else:
@@ -239,6 +254,7 @@ async def stream_endpoint(request: Request) -> Response:
             messages=messages,
             settings=settings,
             stream_id=stream_id,
+            stream_epoch=stream_epoch,
             ttft=ttft,
         )
 

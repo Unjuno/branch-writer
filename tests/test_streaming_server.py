@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from branch_writer.streaming_server import _is_port_in_use, start_server
+from branch_writer.messages import ChatMessage
 
 
 @pytest.fixture(autouse=True)
@@ -60,3 +61,26 @@ def test_start_server_reuses_existing_healthy_server(mock_get: Mock, mock_port: 
 def test_start_server_raises_on_port_conflict(mock_get: Mock, mock_port: Mock) -> None:
     with pytest.raises(RuntimeError, match="already in use"):
         start_server(port=9879)
+
+
+def test_intervention_stream_includes_stream_identity_fields() -> None:
+    import branch_writer.streaming_server as sv
+
+    with patch("branch_writer.streaming_server._iter_chat_completion_chunks", return_value=iter(["続き"])):  # type: ignore[arg-type]
+        events = list(
+            sv._stream_intervention(
+                frozen_messages=[ChatMessage(role="user", content="hi")],
+                assistant_prefix="prefix",
+                generation_prefix="prefix",
+                insertion="",
+                before_content="prefix",
+                selection_start=6,
+                action="regenerate_from_here",
+                settings=Mock(),
+                stream_id="stream-123",
+                stream_epoch=7,
+            )
+        )
+
+    assert any('"streamId": "stream-123"' in event for event in events)
+    assert any('"epoch": 7' in event for event in events)

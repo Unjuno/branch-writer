@@ -263,6 +263,44 @@ def test_handle_cursor_loop_position_stream_key_format() -> None:
         app_module.is_intervenable = _orig_is_intervenable
 
 
+def test_handle_intervention_event_uses_visible_content_for_undo_snapshot() -> None:
+    import app as app_module
+    from app import handle_intervention_event
+
+    assistant = ChatMessage(role="assistant", content="old python content", status="complete")
+    state = {
+        "messages": [assistant],
+        "is_generating": False,
+        "last_error": None,
+        "last_intervention_request_id": None,
+        "streaming_intervention": None,
+        "undo_stack": [],
+        "kw_filter": {"retry_count": 0},
+        "validator": {"error": None},
+    }
+    st = type("st", (), {"session_state": state})()
+    _orig_st = app_module.st
+    app_module.st = st
+    _orig_is_intervenable = app_module.is_intervenable
+    app_module.is_intervenable = Mock(return_value=True)
+
+    try:
+        event = {
+            "requestId": "req-1",
+            "action": "regenerate_from_here",
+            "messageId": assistant.id,
+            "selectionStart": 4,
+            "currentContent": "visible draft content",
+            "streamKey": "stream-1",
+        }
+        handle_intervention_event(event)
+
+        assert state["streaming_intervention"]["before_content"] == "visible draft content"
+    finally:
+        app_module.st = _orig_st
+        app_module.is_intervenable = _orig_is_intervenable
+
+
 # ── handle_cursor_loop_preview ──
 
 
