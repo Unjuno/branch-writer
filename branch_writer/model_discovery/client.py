@@ -90,6 +90,4 @@ def _ollama_tags_url(base_url: str) -> str:
 
 def _openai_models_url(base_url: str) -> str:
     normalized = base_url.strip().rstrip("/")
-    if normalized.endswith("/v1"):
-        return normalized + "/models"
     return normalized + "/models"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import hashlib
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from typing import Any
@@ -664,35 +665,30 @@ def _keyword_retry_from_position(position: int) -> bool:
     return True
 
 
-def _check_keywords_in_stream(content: str) -> bool:
-    """Per-token keyword check. Returns True if retry was triggered."""
-    kw = st.session_state["kw_filter"]
-    if not kw["enabled"]:
-        return False
-    bad_words = [w.strip() for w in kw["words"].split(",") if w.strip()]
-    if not bad_words:
-        return False
-
-    pos = _find_bad_word(content, bad_words)
-    if pos is None:
-        return False
-
-    logger.warning("_check_keywords_in_stream: bad word found at pos=%d, word match", pos)
-    kw["retry_count"] += 1
-    if kw["retry_count"] > kw["max_retries"]:
-        st.session_state["validator"]["error"] = (
-            f"禁止ワード検出、{kw['max_retries']}回リトライしても改善されませんでした"
-        )
-        kw["retry_count"] = 0
-        return False
-
-    return _keyword_retry_from_position(pos)
-
 
 def _run_llm_validator(content: str) -> None:
     logger.info("_run_llm_validator: validating %d chars", len(content))
     settings: LlmSettings = st.session_state["llm_settings"]
     prompt_template = st.session_state["validator"]["prompt"]
+    cache_material = "\n".join([
+        content,
+        prompt_template,
+        settings.base_url,
+        settings.model,
+        str(settings.temperature),
+        str(settings.max_tokens),
+        str(settings.context_window),
+        str(settings.request_timeout_seconds),
+        settings.system_prompt,
+    ])
+    content_hash = hashlib.sha256(cache_material.encode("utf-8")).hexdigest()
+    cache = st.session_state.setdefault("validation_cache", {})
+    cached_hash = cache.get("content_hash", "")
+    if cached_hash == content_hash and cache.get("results") is not None:
+        st.session_state["validator"]["results"] = cache.get("results")
+        st.session_state["validator"]["error"] = cache.get("error")
+        logger.info("_run_llm_validator: cache hit")
+        return
     if not prompt_template:
         prompt = (
             "以下の文章に不自然・不適切な表現がないか分析し、"
@@ -710,9 +706,18 @@ def _run_llm_validator(content: str) -> None:
 
     try:
         raw = generate_text(prompt, settings)
-        st.session_state["validator"]["results"] = _parse_llm_issues(raw)
+        results = _parse_llm_issues(raw)
+        st.session_state["validator"]["results"] = results
+        st.session_state["validator"]["error"] = None
+        cache["content_hash"] = content_hash
+        cache["results"] = results
+        cache["error"] = None
     except Exception as exc:
-        st.session_state["validator"]["error"] = f"LLM検証エラー: {exc}"
+        message = f"LLM検証エラー: {exc}"
+        st.session_state["validator"]["error"] = message
+        cache["content_hash"] = content_hash
+        cache["results"] = None
+        cache["error"] = message
 
 
 def _parse_llm_issues(raw: str) -> list[dict[str, Any]]:
@@ -807,6 +812,8 @@ def handle_streaming_error(event: dict[str, Any]) -> None:
             before = intervention.get("before_content")
             if before:
                 latest.content = before
+        else:
+            latest.content = ""
 
     latest.status = "error"
     set_error(st.session_state, f"Streaming error: {event.get('message', 'Unknown')}")
@@ -832,6 +839,9 @@ def handle_user_prompt(prompt: str) -> None:
 
     st.session_state["kw_filter"]["retry_count"] = 0
     st.session_state["validator"]["error"] = None
+    st.session_state["validation_cache"]["content_hash"] = ""
+    st.session_state["validation_cache"]["results"] = None
+    st.session_state["validation_cache"]["error"] = None
 
 
 def handle_streaming_complete(event: dict[str, Any]) -> bool:
@@ -1005,6 +1015,9 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
 
     st.session_state["kw_filter"]["retry_count"] = 0
     st.session_state["validator"]["error"] = None
+    st.session_state["validation_cache"]["content_hash"] = ""
+    st.session_state["validation_cache"]["results"] = None
+    st.session_state["validation_cache"]["error"] = None
 
     # Streaming will be handled by React component via SSE
     # No need to create a generator here
@@ -1088,6 +1101,9 @@ def handle_cursor_loop_position(message_id: str, selection_start: int) -> None:
     }
     st.session_state["kw_filter"]["retry_count"] = 0
     st.session_state["validator"]["error"] = None
+    st.session_state["validation_cache"]["content_hash"] = ""
+    st.session_state["validation_cache"]["results"] = None
+    st.session_state["validation_cache"]["error"] = None
 
 
 def handle_cursor_loop_preview(content: str, stream_key: str = "") -> None:

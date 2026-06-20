@@ -13,7 +13,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from branch_writer.config import LlmSettings
 from branch_writer.intervention import strip_continuation_overlap
@@ -74,7 +74,7 @@ def _stream_normal(
 ) -> Generator[str, None, None]:
     """Stream a normal assistant response character by character."""
     logger.info("_stream_normal: streamId=%s, %d messages, model=%s", stream_id, len(messages), settings.model)
-    abort = _active_streams.get(stream_id)
+    abort = _get_abort_event(stream_id)
     full_content = ""
     try:
         for chunk in _iter_chat_completion_chunks(
@@ -98,7 +98,7 @@ def _stream_normal(
         logger.error("_stream_normal: Unexpected error streamId=%s: %s", stream_id, exc)
         yield _sse_event("error", {"message": f"Unexpected error: {exc}", "streamId": stream_id})
     finally:
-        _active_streams.pop(stream_id, None)
+        _unregister_stream(stream_id)
 
 
 def _stream_intervention(
@@ -117,7 +117,7 @@ def _stream_intervention(
     prompt_prefix = generation_prefix if generation_prefix else base_content
     logger.info("_stream_intervention: streamId=%s, action=%s, selectionStart=%d, base=%d chars",
                 stream_id, action, selection_start, len(base_content))
-    abort = _active_streams.get(stream_id)
+    abort = _get_abort_event(stream_id)
     raw_continuation = ""
     last_clean_len = 0
     try:
@@ -167,11 +167,11 @@ def _stream_intervention(
         logger.error("_stream_intervention: Unexpected error streamId=%s: %s", stream_id, exc)
         yield _sse_event("error", {"message": f"Unexpected error: {exc}", "streamId": stream_id})
     finally:
-        _active_streams.pop(stream_id, None)
+        _unregister_stream(stream_id)
 
 
 @app.post("/api/stream")
-async def stream_endpoint(request: Request) -> StreamingResponse:
+async def stream_endpoint(request: Request) -> Response:
     body = await request.json()
 
     stream_id = body.get("streamId", "")
@@ -181,15 +181,23 @@ async def stream_endpoint(request: Request) -> StreamingResponse:
 
     logger.info("stream_endpoint: streamId=%s, mode=%s, model=%s", stream_id, mode, settings_data.get("model"))
 
-    settings = LlmSettings(**settings_data)
-    messages = [ChatMessage(**m) for m in messages_data]
+    try:
+        settings = LlmSettings(**settings_data)
+        messages = [ChatMessage(**m) for m in messages_data]
+    except (TypeError, KeyError, ValueError) as exc:
+        logger.error("stream_endpoint: invalid request data: %s", exc)
+        return JSONResponse(status_code=400, content={"error": f"Invalid request data: {exc}"})
 
     abort_event = threading.Event()
-    _active_streams[stream_id] = abort_event
+    _register_stream(stream_id, abort_event)
 
     if mode in ("intervention", "cursor_loop"):
         frozen_data = body.get("frozenMessages", [])
-        frozen_messages = [ChatMessage(**m) for m in frozen_data]
+        try:
+            frozen_messages = [ChatMessage(**m) for m in frozen_data]
+        except (TypeError, KeyError, ValueError) as exc:
+            _unregister_stream(stream_id)
+            return JSONResponse(status_code=400, content={"error": f"Invalid frozen messages: {exc}"})
         generator = _stream_intervention(
             frozen_messages=frozen_messages,
             assistant_prefix=body.get("assistantPrefix", ""),
@@ -224,7 +232,7 @@ async def abort_endpoint(request: Request) -> dict[str, str]:
     body = await request.json()
     stream_id = body.get("streamId", "")
     logger.info("abort_endpoint: streamId=%s", stream_id)
-    abort_event = _active_streams.get(stream_id)
+    abort_event = _get_abort_event(stream_id)
     if abort_event:
         abort_event.set()
         return {"status": "aborted", "streamId": stream_id}

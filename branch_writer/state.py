@@ -107,6 +107,14 @@ def initialize_state(state: MutableMapping[str, Any]) -> None:
     state["validator"].setdefault("prompt", "")
     state["validator"].setdefault("results", None)
     state["validator"].setdefault("error", None)
+    state.setdefault("validation_cache", {
+        "content_hash": "",
+        "results": None,
+        "error": None,
+    })
+    state["validation_cache"].setdefault("content_hash", "")
+    state["validation_cache"].setdefault("results", None)
+    state["validation_cache"].setdefault("error", None)
 
 
 def get_messages(state: MutableMapping[str, Any]) -> list[ChatMessage]:

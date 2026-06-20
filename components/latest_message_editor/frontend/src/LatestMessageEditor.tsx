@@ -1,4 +1,4 @@
-import React, { CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import React, { CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ComponentProps, Streamlit } from "streamlit-component-lib"
 
 type StreamingDoneEvent = { type: "streaming_done"; content: string; messageId: string; streamKey?: string }
@@ -41,14 +41,6 @@ function codePointOffsetFromDomOffset(text: string, domOffset: number): number {
   return count
 }
 
-function splitDisplayUnits(text: string): string[] {
-  const segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null
-  if (!segmenter) return Array.from(text)
-  return Array.from(segmenter.segment(text), segment => segment.segment)
-}
-
 function LatestMessageEditor(props: ComponentProps) {
   const args = props.args as LatestMessageEditorArgs
   const theme = (props as ComponentProps & { theme?: StreamlitTheme }).theme
@@ -74,95 +66,20 @@ function LatestMessageEditor(props: ComponentProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const selectionRef = useRef<{ start: number; end: number } | null>(null)
   const isStreamUpdateRef = useRef(false)
-  const typewriterTimerRef = useRef<number | null>(null)
-  const targetContentRef = useRef(initialContent)
-  const displayedContentRef = useRef(initialContent)
-  const displayedUnitsRef = useRef(splitDisplayUnits(initialContent))
-  const targetUnitsRef = useRef(splitDisplayUnits(initialContent))
-
-  useEffect(() => { Streamlit.setFrameHeight() }, [draftContent])
 
   useEffect(() => {
-    return () => {
-      if (typewriterTimerRef.current !== null) {
-        window.clearInterval(typewriterTimerRef.current)
-        typewriterTimerRef.current = null
-      }
-    }
-  }, [])
-
-  const animateToTarget = useCallback((target: string, instant = false) => {
-    targetContentRef.current = target
-    targetUnitsRef.current = splitDisplayUnits(target)
-    if (typewriterTimerRef.current !== null) {
-      window.clearInterval(typewriterTimerRef.current)
-      typewriterTimerRef.current = null
-    }
-
-    if (instant) {
-      displayedContentRef.current = target
-      displayedUnitsRef.current = targetUnitsRef.current.slice()
-      isStreamUpdateRef.current = true
-      setDraftContent(target)
-      return
-    }
-
-    if (displayedContentRef.current === target) return
-    if (!target.startsWith(displayedContentRef.current)) {
-      displayedContentRef.current = draftContent
-      displayedUnitsRef.current = splitDisplayUnits(draftContent)
-      if (!target.startsWith(displayedContentRef.current)) {
-        const targetUnits = targetUnitsRef.current
-        displayedUnitsRef.current = targetUnits.slice(0, Math.min(displayedUnitsRef.current.length, targetUnits.length))
-        displayedContentRef.current = displayedUnitsRef.current.join("")
-      }
-    }
-
-    typewriterTimerRef.current = window.setInterval(() => {
-      if (isEditingRef.current) {
-        if (typewriterTimerRef.current !== null) {
-          window.clearInterval(typewriterTimerRef.current)
-          typewriterTimerRef.current = null
-        }
-        return
-      }
-
-      const nextTarget = targetContentRef.current
-      if (displayedContentRef.current === nextTarget) {
-        if (typewriterTimerRef.current !== null) {
-          window.clearInterval(typewriterTimerRef.current)
-          typewriterTimerRef.current = null
-        }
-        return
-      }
-
-      const currentUnits = displayedUnitsRef.current
-      const targetUnits = targetUnitsRef.current
-      if (targetUnits.length > currentUnits.length && targetUnits.join("").startsWith(displayedContentRef.current)) {
-        displayedUnitsRef.current = targetUnits.slice(0, currentUnits.length + 1)
-        displayedContentRef.current = displayedUnitsRef.current.join("")
-      } else {
-        displayedContentRef.current = nextTarget
-        displayedUnitsRef.current = targetUnits.slice()
-      }
-
-      isStreamUpdateRef.current = true
-      setDraftContent(displayedContentRef.current)
-    }, 16)
+    const id = window.requestAnimationFrame(() => {
+      Streamlit.setFrameHeight()
+    })
+    return () => window.cancelAnimationFrame(id)
   }, [draftContent])
 
   useEffect(() => {
     if (!isEditingRef.current) {
-      if (isStreaming) {
-        targetContentRef.current = initialContent
-        if (typewriterTimerRef.current === null) {
-          animateToTarget(initialContent)
-        }
-      } else {
-        animateToTarget(initialContent, true)
-      }
+      isStreamUpdateRef.current = true
+      setDraftContent(initialContent)
     }
-  }, [initialContent, animateToTarget, isStreaming])
+  }, [initialContent])
 
   useLayoutEffect(() => {
     if (!isStreamUpdateRef.current) return
@@ -236,13 +153,19 @@ function LatestMessageEditor(props: ComponentProps) {
                 if (nextContent.length >= accumulatedRef.current.length) {
                   accumulatedRef.current = nextContent
                 }
-                if (!isEditingRef.current) { animateToTarget(accumulatedRef.current) }
+                if (!isEditingRef.current) {
+                  isStreamUpdateRef.current = true
+                  setDraftContent(accumulatedRef.current)
+                }
               } else if (eventType === "done") {
                 const finalContent = parsed.fullContent ?? accumulatedRef.current
                 accumulatedRef.current = finalContent
-                if (!isEditingRef.current) { animateToTarget(finalContent, true) }
+                if (!isEditingRef.current) {
+                  isStreamUpdateRef.current = true
+                  setDraftContent(finalContent)
+                }
                 failedStreamKeyRef.current = ""
-                if (!doneSentRef.current && finalContent.length > 0) {
+                if (!doneSentRef.current && !completedRef.current && finalContent.length > 0) {
                   doneSentRef.current = true
                   Streamlit.setComponentValue({ type: "streaming_done" as const, content: finalContent, messageId, streamKey: thisStreamKey })
                 }
@@ -373,7 +296,7 @@ function LatestMessageEditor(props: ComponentProps) {
           fontSize: "inherit", fontFamily: "inherit", lineHeight: 1.7,
           color: "var(--bw-text)", background: "transparent",
           border: "none", borderRadius: 0, outline: "none", boxShadow: "none",
-          minHeight: "3.5rem", resize: "none", overflow: "hidden",
+          minHeight: "3rem", resize: "none", overflow: "hidden",
           whiteSpace: "pre-wrap", wordWrap: "break-word",
         }}
       />

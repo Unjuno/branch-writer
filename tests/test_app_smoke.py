@@ -443,3 +443,50 @@ def test_handle_cursor_loop_error_stale_guard() -> None:
         assert state["is_generating"] is True
     finally:
         app_module.st = _orig_st
+
+
+def test_llm_validator_cache_depends_on_prompt() -> None:
+    from app import _run_llm_validator
+    import app as app_module
+
+    state = {
+        "messages": [],
+        "is_generating": False,
+        "last_error": None,
+        "streaming_intervention": None,
+        "kw_filter": {"retry_count": 0},
+        "validator": {"enabled": True, "prompt": "", "results": None, "error": None},
+        "validation_cache": {"content_hash": "", "results": None, "error": None},
+        "llm_settings": type("S", (), {
+            "base_url": "http://localhost:1234/v1",
+            "model": "model-a",
+            "temperature": 0.7,
+            "max_tokens": 1024,
+            "context_window": 2048,
+            "request_timeout_seconds": 10,
+            "system_prompt": "",
+        })(),
+    }
+    st = type("st", (), {"session_state": state})()
+    _orig_st = app_module.st
+    _orig_generate_text = app_module.generate_text
+    calls: list[str] = []
+
+    def fake_generate_text(prompt: str, settings: object) -> str:
+        calls.append(prompt)
+        return "[]"
+
+    app_module.st = st
+    app_module.generate_text = fake_generate_text
+
+    try:
+        _run_llm_validator("hello")
+        _run_llm_validator("hello")
+        assert len(calls) == 1
+
+        state["validator"]["prompt"] = "custom {text}"
+        _run_llm_validator("hello")
+        assert len(calls) == 2
+    finally:
+        app_module.st = _orig_st
+        app_module.generate_text = _orig_generate_text
