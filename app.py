@@ -313,6 +313,13 @@ def render_sidebar() -> None:
 
     render_ttft_display()
 
+    st.session_state["long_mode"] = st.sidebar.checkbox(
+        "長文生成モード",
+        value=bool(st.session_state.get("long_mode", False)),
+        disabled=is_generating,
+        help="EOF後も自動で改行＋継続生成を繰り返します。止めるには編集またはチャット入力を送信してください。",
+    )
+
     st.sidebar.divider()
     st.session_state["render_message_limit"] = st.sidebar.number_input(
         "表示メッセージ数",
@@ -532,6 +539,7 @@ def render_messages() -> None:
                     intervention_data=intervention_data,
                     cursor_loop_enabled=False,
                     preview_content="",
+                    long_mode=bool(st.session_state.get("long_mode", False)),
                     messages_for_stream=messages_for_stream,
                     frozen_messages=frozen,
                     llm_settings=llm_settings_dict,

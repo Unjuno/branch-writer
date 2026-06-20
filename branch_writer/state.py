@@ -63,6 +63,7 @@ def initialize_state(state: MutableMapping[str, Any]) -> None:
     state.setdefault("insertion_log", [])
     state.setdefault("reuse_insertion", None)
     state.setdefault("streaming_intervention", None)
+    state.setdefault("long_mode", False)
 
     state.setdefault("cursor_loop", {
         "enabled": False,

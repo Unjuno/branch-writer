@@ -213,6 +213,56 @@ def _stream_intervention(
         _unregister_stream(stream_id)
 
 
+def _stream_continue(
+    frozen_messages: list[ChatMessage],
+    base_content: str,
+    settings: LlmSettings,
+    stream_id: str,
+    stream_epoch: int,
+    ttft: dict[str, Any] | None = None,
+) -> Generator[str, None, None]:
+    """Continue generating from the end of base_content."""
+    logger.info("_stream_continue: streamId=%s, base=%d chars", stream_id, len(base_content))
+    abort = _get_abort_event(stream_id)
+    full_content = base_content
+    emitted_ttft_debug = False
+    try:
+        if ttft is not None:
+            ttft["t3"] = time.monotonic()
+        for chunk in _iter_chat_completion_chunks(
+            api_messages=[
+                *to_openai_messages(frozen_messages, system_prompt=settings.system_prompt),
+                {"role": "assistant", "content": base_content},
+            ],
+            settings=settings,
+            ttft=ttft,
+        ):
+            if abort and abort.is_set():
+                yield _sse_event("aborted", {"streamId": stream_id, "epoch": stream_epoch})
+                return
+            if ttft is not None and not emitted_ttft_debug:
+                payload = dict(ttft)
+                payload["streamId"] = stream_id
+                payload["epoch"] = stream_epoch
+                yield _sse_event("debug:ttft", payload)
+                emitted_ttft_debug = True
+            full_content += chunk
+            if abort and abort.is_set():
+                yield _sse_event("aborted", {"streamId": stream_id, "epoch": stream_epoch})
+                return
+            yield _sse_event("token", {"fullContent": full_content, "streamId": stream_id, "epoch": stream_epoch})
+        logger.info("_stream_continue: done, streamId=%s, %d chars", stream_id, len(full_content))
+        yield _sse_event("done", {"streamId": stream_id, "epoch": stream_epoch, "fullContent": full_content})
+    except LlmError as exc:
+        logger.error("_stream_continue: LlmError streamId=%s: %s", stream_id, exc)
+        yield _sse_event("error", {"message": str(exc), "streamId": stream_id, "epoch": stream_epoch})
+    except Exception as exc:
+        logger.error("_stream_continue: Unexpected error streamId=%s: %s", stream_id, exc)
+        yield _sse_event("error", {"message": f"Unexpected error: {exc}", "streamId": stream_id, "epoch": stream_epoch})
+    finally:
+        _unregister_stream(stream_id)
+
+
 @app.post("/api/stream")
 async def stream_endpoint(request: Request) -> Response:
     body = await request.json()
@@ -242,7 +292,23 @@ async def stream_endpoint(request: Request) -> Response:
     abort_event = threading.Event()
     _register_stream(stream_id, abort_event)
 
-    if mode in ("intervention", "cursor_loop"):
+    if mode == "continue":
+        frozen_data = body.get("frozenMessages", [])
+        try:
+            frozen_messages = [ChatMessage(**m) for m in frozen_data]
+        except (TypeError, KeyError, ValueError) as exc:
+            _unregister_stream(stream_id)
+            return JSONResponse(status_code=400, content={"error": f"Invalid frozen messages: {exc}"})
+        base = body.get("baseContent", "")
+        generator = _stream_continue(
+            frozen_messages=frozen_messages,
+            base_content=base,
+            settings=settings,
+            stream_id=stream_id,
+            stream_epoch=stream_epoch,
+            ttft=ttft,
+        )
+    elif mode in ("intervention", "cursor_loop"):
         frozen_data = body.get("frozenMessages", [])
         try:
             frozen_messages = [ChatMessage(**m) for m in frozen_data]

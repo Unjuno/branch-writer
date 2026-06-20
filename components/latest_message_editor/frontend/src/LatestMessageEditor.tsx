@@ -7,7 +7,7 @@ type StreamingErrorEvent = { type: "streaming_error"; message: string; content: 
 type LatestMessageEditorArgs = {
   messageId?: string; content?: string; disabled?: boolean; streamingUrl?: string
   isStreaming?: boolean; interventionData?: Record<string, unknown> | null
-  cursorLoopEnabled?: boolean; previewContent?: string
+  cursorLoopEnabled?: boolean; previewContent?: string; longMode?: boolean
   messagesForStream?: Array<{ role: string; content: string; id: string }>
   frozenMessages?: Array<{ role: string; content: string; id: string }>
   keywordFilter?: { enabled?: boolean; words?: string } | null
@@ -73,13 +73,13 @@ function LatestMessageEditor(props: ComponentProps) {
   const interventionData = args.interventionData ?? null
   const messagesForStream = args.messagesForStream ?? []
   const frozenMessages = args.frozenMessages ?? []
+  const longMode = Boolean(args.longMode)
   const keywordFilter = args.keywordFilter ?? null
   const keywordWords = keywordFilter?.enabled ? parseBadWords(keywordFilter.words ?? "") : []
   const llmSettings = args.llmSettings ?? null
 
   const [draftContent, setDraftContent] = useState(initialContent)
   const [streamId, setStreamId] = useState<string | null>(null)
-  const [streamHeight, setStreamHeight] = useState<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const activeStreamIdRef = useRef("")
   const activeEpochRef = useRef(0)
@@ -97,6 +97,7 @@ function LatestMessageEditor(props: ComponentProps) {
   const isStreamUpdateRef = useRef(false)
   const ttftRef = useRef<TtftTiming>({})
   const firstTokenRenderedRef = useRef(false)
+  const continueParamsRef = useRef<Record<string, unknown> | null>(null)
   const pendingContentRef = useRef<string | null>(null)
   const coalesceRafRef = useRef<number | null>(null)
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -247,10 +248,9 @@ function LatestMessageEditor(props: ComponentProps) {
     const ta = textareaRef.current
     if (!ta) return
     if (isStreamingRef.current) {
-      if (streamHeight !== null) {
-        ta.style.height = `${streamHeight}px`
-        ta.style.overflowY = "hidden"
-      }
+      ta.style.height = `${ta.scrollHeight}px`
+      ta.style.overflowY = "hidden"
+      Streamlit.setFrameHeight()
       return
     }
     ta.style.height = "auto"
@@ -260,7 +260,7 @@ function LatestMessageEditor(props: ComponentProps) {
       Streamlit.setFrameHeight()
     })
     return () => window.cancelAnimationFrame(frameId)
-  }, [draftContent, streamHeight])
+  }, [draftContent])
 
   const generateStreamId = useCallback(() => `${messageId}:stream:${Date.now()}:${Math.random().toString(36).slice(2)}`, [messageId])
 
@@ -306,9 +306,7 @@ function LatestMessageEditor(props: ComponentProps) {
     firstTokenRenderedRef.current = false
     isStreamingRef.current = true
     if (textareaRef.current) {
-      const h = textareaRef.current.scrollHeight
-      setStreamHeight(h)
-      textareaRef.current.style.height = `${h}px`
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`
       textareaRef.current.style.overflowY = "hidden"
     }
     try {
@@ -395,6 +393,21 @@ function LatestMessageEditor(props: ComponentProps) {
                   setDraftContent(finalContent)
                 }
                 failedStreamKeyRef.current = ""
+                if (longMode && !isEditingRef.current && frozenMessages.length && llmSettings) {
+                  accumulatedRef.current = finalContent + "\n"
+                  isEditingRef.current = false
+                  completedRef.current = false
+                  firstTokenRenderedRef.current = false
+                  ttftRef.current = {}
+                  continueParamsRef.current = {
+                    baseContent: accumulatedRef.current,
+                    frozenMessages,
+                    streamKey: `${messageId}:continue:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+                    streamKeySuffix: `continue:${Date.now()}`,
+                  }
+                  if (abortControllerRef.current === controller) setStreamId(null)
+                  return
+                }
                 if (!doneSentRef.current && finalContent.length > 0) {
                   doneSentRef.current = true
                   const ttft = getTtftSummary()
@@ -448,7 +461,12 @@ function LatestMessageEditor(props: ComponentProps) {
       completedRef.current = false; failedStreamKeyRef.current = ""; abortControllerRef.current?.abort(); setStreamId(null)
     }
     const currentStreamKey = streamKeyFromData || `${messageId}:${streamModeRef.current}:${interventionKey}`
-    if (isStreaming && !completedRef.current && streamingUrl && !streamId) {
+    const continueParams = continueParamsRef.current
+    if (continueParams && isStreaming && streamingUrl && llmSettings && !streamId) {
+      continueParamsRef.current = null
+      completedRef.current = true
+      startStreaming("continue", continueParams)
+    } else if (isStreaming && !completedRef.current && streamingUrl && !streamId) {
       if (failedStreamKeyRef.current !== currentStreamKey) {
         completedRef.current = true
         const hasIntervention = interventionData && Object.keys(interventionData).length > 0
@@ -465,7 +483,7 @@ function LatestMessageEditor(props: ComponentProps) {
       }
     }
     if (!isStreaming) { completedRef.current = false; failedStreamKeyRef.current = "" }
-  }, [isStreaming, streamingUrl, streamId, startStreaming, interventionData, interventionKey, messageId, streamKeyFromData])
+  }, [isStreaming, streamingUrl, streamId, startStreaming, interventionData, interventionKey, messageId, streamKeyFromData, llmSettings])
 
   useEffect(() => () => { abortControllerRef.current?.abort(); cancelWarmup() }, [])
   useEffect(() => {
