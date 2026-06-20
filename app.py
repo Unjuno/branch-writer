@@ -555,14 +555,13 @@ def render_messages() -> None:
                                     intervention_before = st.session_state.get("streaming_intervention")
                                     retried = handle_streaming_complete(event)
                                     st.session_state.pop(f"editor-{message.id}", None)
-                                    if retried or intervention_before is not None:
-                                        logger.info(
-                                            "render_messages: rerun after streaming_done "
-                                            "(retried=%s, had_intervention=%s)",
-                                            retried,
-                                            intervention_before is not None,
-                                        )
-                                        st.rerun()
+                                    logger.info(
+                                        "render_messages: rerun after streaming_done "
+                                        "(retried=%s, had_intervention=%s)",
+                                        retried,
+                                        intervention_before is not None,
+                                    )
+                                    st.rerun()
                     elif event_type == "streaming_error":
                         logger.error("render_messages: streaming_error: %s", event.get("message"))
                         if not st.session_state.get("is_generating", False):

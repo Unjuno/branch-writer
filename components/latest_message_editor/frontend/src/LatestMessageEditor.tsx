@@ -166,7 +166,11 @@ function LatestMessageEditor(props: ComponentProps) {
     const ta = textareaRef.current
     if (!ta) return
     ta.style.height = "auto"
-    ta.style.height = `${Math.min(ta.scrollHeight, 520)}px`
+    ta.style.height = `${ta.scrollHeight}px`
+    const frameId = window.requestAnimationFrame(() => {
+      Streamlit.setFrameHeight()
+    })
+    return () => window.cancelAnimationFrame(frameId)
   }, [draftContent])
 
   const generateStreamId = useCallback(() => `${messageId}:stream:${Date.now()}:${Math.random().toString(36).slice(2)}`, [messageId])
@@ -177,7 +181,9 @@ function LatestMessageEditor(props: ComponentProps) {
   }, [])
 
   const isCurrentEvent = useCallback((parsed: Record<string, unknown>) => {
-    return parsed.streamId === activeStreamIdRef.current && parsed.epoch === activeEpochRef.current
+    if (parsed.streamId !== activeStreamIdRef.current) return false
+    if (parsed.epoch === undefined) return true
+    return parsed.epoch === activeEpochRef.current
   }, [])
 
   const startStreaming = useCallback(async (mode: string, extraParams: Record<string, unknown> = {}) => {
@@ -283,7 +289,7 @@ function LatestMessageEditor(props: ComponentProps) {
                   setDraftContent(finalContent)
                 }
                 failedStreamKeyRef.current = ""
-                if (!doneSentRef.current && !completedRef.current && finalContent.length > 0) {
+                if (!doneSentRef.current && finalContent.length > 0) {
                   doneSentRef.current = true
                   const ttft = getTtftSummary()
                   Streamlit.setComponentValue({ type: "streaming_done" as const, content: finalContent, messageId, streamKey: thisStreamKey, ttft: Object.keys(ttft).length > 0 ? ttft : undefined })
@@ -423,7 +429,7 @@ function LatestMessageEditor(props: ComponentProps) {
           fontSize: "inherit", fontFamily: "inherit", lineHeight: 1.7,
           color: "var(--bw-text)", background: "transparent",
           border: "none", borderRadius: 0, outline: "none", boxShadow: "none",
-          minHeight: "3rem", maxHeight: "520px", resize: "none", overflowY: "auto",
+          minHeight: "3rem", maxHeight: "none", resize: "none", overflowY: "hidden",
           whiteSpace: "pre-wrap", wordWrap: "break-word",
         }}
       />
