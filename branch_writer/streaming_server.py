@@ -213,6 +213,9 @@ def _stream_intervention(
         _unregister_stream(stream_id)
 
 
+_CONTINUE_TRUNCATE = 4000
+
+
 def _stream_continue(
     frozen_messages: list[ChatMessage],
     base_content: str,
@@ -222,7 +225,9 @@ def _stream_continue(
     ttft: dict[str, Any] | None = None,
 ) -> Generator[str, None, None]:
     """Continue generating from the end of base_content."""
-    logger.info("_stream_continue: streamId=%s, base=%d chars", stream_id, len(base_content))
+    truncated = base_content[-_CONTINUE_TRUNCATE:] if len(base_content) > _CONTINUE_TRUNCATE else base_content
+    logger.info("_stream_continue: streamId=%s, base=%d chars, truncated=%d",
+                stream_id, len(base_content), len(truncated))
     abort = _get_abort_event(stream_id)
     full_content = base_content
     emitted_ttft_debug = False
@@ -232,7 +237,7 @@ def _stream_continue(
         for chunk in _iter_chat_completion_chunks(
             api_messages=[
                 *to_openai_messages(frozen_messages, system_prompt=settings.system_prompt),
-                {"role": "assistant", "content": base_content},
+                {"role": "assistant", "content": truncated},
             ],
             settings=settings,
             ttft=ttft,

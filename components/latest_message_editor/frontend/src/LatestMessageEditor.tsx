@@ -80,6 +80,7 @@ function LatestMessageEditor(props: ComponentProps) {
 
   const [draftContent, setDraftContent] = useState(initialContent)
   const [streamId, setStreamId] = useState<string | null>(null)
+  const [isActive, setIsActive] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const activeStreamIdRef = useRef("")
   const activeEpochRef = useRef(0)
@@ -102,6 +103,7 @@ function LatestMessageEditor(props: ComponentProps) {
   const coalesceRafRef = useRef<number | null>(null)
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const warmupAbortRef = useRef<AbortController | null>(null)
+  const sendingInlineRef = useRef(false)
 
   function getTtftSummary(): Record<string, number | undefined> {
     const t = ttftRef.current
@@ -199,8 +201,30 @@ function LatestMessageEditor(props: ComponentProps) {
     const id = window.requestAnimationFrame(() => {
       Streamlit.setFrameHeight()
     })
-    return () => window.cancelAnimationFrame(id)
+    const timeoutId = window.setTimeout(() => {
+      Streamlit.setFrameHeight()
+    }, 0)
+    const timeoutId2 = window.setTimeout(() => {
+      Streamlit.setFrameHeight()
+    }, 50)
+    return () => {
+      window.cancelAnimationFrame(id)
+      window.clearTimeout(timeoutId)
+      window.clearTimeout(timeoutId2)
+    }
   }, [draftContent])
+
+  useEffect(() => {
+    const ta = textareaRef.current
+    const container = containerRef.current
+    if (!ta || !container || typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver(() => {
+      Streamlit.setFrameHeight()
+    })
+    observer.observe(container)
+    observer.observe(ta)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     if (!isEditingRef.current) {
@@ -250,8 +274,16 @@ function LatestMessageEditor(props: ComponentProps) {
     if (isStreamingRef.current) {
       ta.style.height = `${ta.scrollHeight}px`
       ta.style.overflowY = "hidden"
-      Streamlit.setFrameHeight()
-      return
+      const frameId = window.requestAnimationFrame(() => {
+        Streamlit.setFrameHeight()
+      })
+      const timeoutId = window.setTimeout(() => {
+        Streamlit.setFrameHeight()
+      }, 0)
+      return () => {
+        window.cancelAnimationFrame(frameId)
+        window.clearTimeout(timeoutId)
+      }
     }
     ta.style.height = "auto"
     ta.style.height = `${ta.scrollHeight}px`
@@ -286,10 +318,11 @@ function LatestMessageEditor(props: ComponentProps) {
     failedStreamKeyRef.current = ""
     activeStreamIdRef.current = newStreamId
     setStreamId(newStreamId)
-    const baseContent = mode === "intervention" && typeof extraParams.baseContent === "string"
+    setIsActive(true)
+    const baseContent = (mode === "continue" || mode === "intervention") && typeof extraParams.baseContent === "string"
       ? extraParams.baseContent : ""
     const keywordCheckStart = baseContent.length
-    accumulatedRef.current = mode === "intervention" ? baseContent : ""
+    accumulatedRef.current = (mode === "continue" || mode === "intervention") ? baseContent : ""
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -310,8 +343,9 @@ function LatestMessageEditor(props: ComponentProps) {
       textareaRef.current.style.overflowY = "hidden"
     }
     try {
+      const bodySettings = longMode && llmSettings ? { ...llmSettings, max_tokens: Math.min(llmSettings.max_tokens * 2, llmSettings.context_window || 128000) } : llmSettings
       const body: Record<string, unknown> = {
-        streamId: newStreamId, mode, settings: llmSettings, messages: messagesForStream, ...extraParams,
+        streamId: newStreamId, mode, settings: bodySettings, messages: messagesForStream, ...extraParams,
         epoch,
         clientTimestamps: { t0: ttftRef.current.t0, t1: ttftRef.current.t1 },
       }
@@ -381,6 +415,7 @@ function LatestMessageEditor(props: ComponentProps) {
                     const ttft = getTtftSummary()
                     Streamlit.setComponentValue({ type: "streaming_done" as const, content: accumulatedRef.current, messageId, streamKey: thisStreamKey, ttft: Object.keys(ttft).length > 0 ? ttft : undefined })
                   }
+                  setIsActive(false)
                   if (abortControllerRef.current === controller) setStreamId(null)
                   return
                 }
@@ -393,7 +428,7 @@ function LatestMessageEditor(props: ComponentProps) {
                   setDraftContent(finalContent)
                 }
                 failedStreamKeyRef.current = ""
-                if (longMode && !isEditingRef.current && frozenMessages.length && llmSettings) {
+                if (longMode && !isEditingRef.current && llmSettings) {
                   accumulatedRef.current = finalContent + "\n"
                   isEditingRef.current = false
                   completedRef.current = false
@@ -408,11 +443,12 @@ function LatestMessageEditor(props: ComponentProps) {
                   if (abortControllerRef.current === controller) setStreamId(null)
                   return
                 }
-                if (!doneSentRef.current && finalContent.length > 0) {
+                  if (!doneSentRef.current && finalContent.length > 0) {
                   doneSentRef.current = true
                   const ttft = getTtftSummary()
                   Streamlit.setComponentValue({ type: "streaming_done" as const, content: finalContent, messageId, streamKey: thisStreamKey, ttft: Object.keys(ttft).length > 0 ? ttft : undefined })
                 }
+                setIsActive(false)
                 if (abortControllerRef.current === controller) setStreamId(null)
                 return
               } else if (eventType === "error") {
@@ -421,10 +457,12 @@ function LatestMessageEditor(props: ComponentProps) {
                   doneSentRef.current = true
                   Streamlit.setComponentValue({ type: "streaming_error" as const, message: parsed.message ?? "Unknown", content: accumulatedRef.current, messageId, streamKey: thisStreamKey })
                 }
+                setIsActive(false)
                 if (abortControllerRef.current === controller) setStreamId(null)
                 return
               } else if (eventType === "aborted") {
                 failedStreamKeyRef.current = thisStreamKey
+                setIsActive(false)
                 if (abortControllerRef.current === controller) setStreamId(null)
                 return
               }
@@ -432,6 +470,7 @@ function LatestMessageEditor(props: ComponentProps) {
           }
         }
       }
+      setIsActive(false)
       if (abortControllerRef.current === controller) setStreamId(null)
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
@@ -441,13 +480,13 @@ function LatestMessageEditor(props: ComponentProps) {
           Streamlit.setComponentValue({ type: "streaming_error" as const, message: `Fetch error: ${(err as Error).message}`, content: accumulatedRef.current, messageId, streamKey: thisStreamKey })
         }
       } else { failedStreamKeyRef.current = thisStreamKey }
+      setIsActive(false)
       if (abortControllerRef.current === controller) setStreamId(null)
     } finally {
       isStreamingRef.current = false
-      setStreamHeight(null)
       reader?.releaseLock()
     }
-  }, [streamingUrl, generateStreamId, messageId, messagesForStream, llmSettings, keywordWords])
+  }, [streamingUrl, generateStreamId, messageId, messagesForStream, llmSettings, keywordWords, frozenMessages, longMode])
 
   const interventionKeyRef = useRef("")
   const streamKeyFromData = (interventionData?.streamKey as string) || ""
@@ -491,6 +530,9 @@ function LatestMessageEditor(props: ComponentProps) {
   }, [isStreaming, streamId])
 
   const sendInlineEvent = useCallback((content: string, pos: number) => {
+    if (sendingInlineRef.current) return
+    sendingInlineRef.current = true
+    setTimeout(() => { sendingInlineRef.current = false }, 300)
     cancelWarmup()
     ttftRef.current = { t0: performance.now() }
     firstTokenRenderedRef.current = false
@@ -531,7 +573,30 @@ function LatestMessageEditor(props: ComponentProps) {
   }, [sendInlineEvent])
 
   return (
-    <div style={themeVars(theme)}>
+    <div ref={containerRef} style={themeVars(theme)}>
+      <style>{`@keyframes bw-bounce{0%,80%,100%{transform:scale(0.6);opacity:0.4}40%{transform:scale(1);opacity:1}}`}</style>
+      <div style={{
+        display: longMode && isActive ? "flex" : "none", gap: 3, alignItems: "center",
+        padding: "2px 12px", height: 16,
+      }}>
+        <div style={{
+          width: 4, height: 4, borderRadius: "50%",
+          background: "var(--bw-primary, #ff4b4b)",
+          animation: "bw-bounce 1.4s ease-in-out infinite both",
+        }} />
+        <div style={{
+          width: 4, height: 4, borderRadius: "50%",
+          background: "var(--bw-primary, #ff4b4b)",
+          animation: "bw-bounce 1.4s ease-in-out infinite both",
+          animationDelay: "-0.16s",
+        }} />
+        <div style={{
+          width: 4, height: 4, borderRadius: "50%",
+          background: "var(--bw-primary, #ff4b4b)",
+          animation: "bw-bounce 1.4s ease-in-out infinite both",
+          animationDelay: "-0.32s",
+        }} />
+      </div>
       <textarea
         ref={textareaRef}
         value={draftContent}

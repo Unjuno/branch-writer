@@ -74,4 +74,15 @@ data/
 opencode.json
 
 # Unused React component
-components/
+# NOTE: components/ is commented out because LatestMessageEditor is in use
+
+# Debug / temp files
+Untitled
+console-warnings.txt
+debug-*.yml
+snapshot-*.yml
+demo-*.png
+
+# Video demos
+*.mp4
+!demo.mp4
