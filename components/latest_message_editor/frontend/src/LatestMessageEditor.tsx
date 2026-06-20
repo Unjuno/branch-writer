@@ -47,7 +47,7 @@ function LatestMessageEditor(props: ComponentProps) {
   const [draftContent, setDraftContent] = useState(initialContent)
   const [streamId, setStreamId] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
-  const accumulatedRef = useRef("")
+  const accumulatedRef = useRef(initialContent)
   const doneSentRef = useRef(false)
   const completedRef = useRef(false)
   const failedStreamKeyRef = useRef("")
@@ -101,10 +101,10 @@ function LatestMessageEditor(props: ComponentProps) {
           break
         }
         buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() ?? ""
+        const pylines = buffer.split("\n")
+        buffer = pylines.pop() ?? ""
         let eventType = ""
-        for (const line of lines) {
+        for (const line of pylines) {
           if (line.startsWith("event:")) eventType = line.slice(6).trim()
           else if (line.startsWith("data:")) {
             const data = line.slice(5).trim()
@@ -112,15 +112,11 @@ function LatestMessageEditor(props: ComponentProps) {
               const parsed = JSON.parse(data)
               if (eventType === "token") {
                 accumulatedRef.current = parsed.fullContent ?? (accumulatedRef.current + (parsed.text ?? ""))
-                if (!isEditingRef.current) {
-                  setDraftContent(accumulatedRef.current)
-                }
+                if (!isEditingRef.current) setDraftContent(accumulatedRef.current)
               } else if (eventType === "done") {
                 const finalContent = parsed.fullContent ?? accumulatedRef.current
                 accumulatedRef.current = finalContent
-                if (!isEditingRef.current) {
-                  setDraftContent(finalContent)
-                }
+                if (!isEditingRef.current) setDraftContent(finalContent)
                 failedStreamKeyRef.current = ""
                 if (!doneSentRef.current && finalContent.length > 0) {
                   doneSentRef.current = true
