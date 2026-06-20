@@ -66,16 +66,22 @@ def _iter_chat_completion_chunks(
     payload = _chat_payload(api_messages=api_messages, settings=settings, stream=True)
     url = _chat_completions_url(settings)
     timeout_seconds = settings.request_timeout_seconds
-    logger.info("_iter_chat_completion_chunks: POST %s (model=%s, msgs=%d, timeout=%ds)",
-                url, settings.model, len(api_messages), timeout_seconds)
+    timeout_label = "disabled" if timeout_seconds is None else f"{timeout_seconds:.0f}s"
+    logger.info("_iter_chat_completion_chunks: POST %s (model=%s, msgs=%d, timeout=%s)",
+                url, settings.model, len(api_messages), timeout_label)
 
     try:
+        timeout = (
+            httpx.Timeout(None)
+            if timeout_seconds is None
+            else httpx.Timeout(timeout_seconds, connect=min(10.0, timeout_seconds), read=None)
+        )
         with httpx.stream(
             "POST",
             url,
             headers=_headers(settings),
             json=payload,
-            timeout=timeout_seconds,
+            timeout=timeout,
         ) as response:
             if response.status_code >= 400:
                 body = response.read().decode("utf-8", errors="replace")[:2000]
@@ -84,6 +90,7 @@ def _iter_chat_completion_chunks(
 
             chunk_count = 0
             last_data: dict[str, Any] | None = None
+            saw_done = False
             for line in response.iter_lines():
                 if not line:
                     continue
@@ -93,6 +100,7 @@ def _iter_chat_completion_chunks(
 
                 if line == "[DONE]":
                     logger.debug("_iter_chat_completion_chunks: [DONE] received after %d chunks", chunk_count)
+                    saw_done = True
                     break
 
                 try:
@@ -118,11 +126,17 @@ def _iter_chat_completion_chunks(
                             times["usage"] = usage
                 except Exception:
                     pass
+            if chunk_count and not saw_done:
+                logger.warning(
+                    "_iter_chat_completion_chunks: stream closed before [DONE] (chunks=%d, url=%s)",
+                    chunk_count,
+                    url,
+                )
     except LlmError:
         raise
     except httpx.TimeoutException as exc:
-        logger.error("_iter_chat_completion_chunks: timeout after %ds: %s", timeout_seconds, url)
-        raise LlmError(f"LLM stream timed out after {timeout_seconds:.0f}s: {url}") from exc
+        logger.error("_iter_chat_completion_chunks: timeout after %s: %s", timeout_label, url)
+        raise LlmError(f"LLM request timed out after {timeout_label}: {url}") from exc
     except httpx.RequestError as exc:
         logger.error("_iter_chat_completion_chunks: request error: %s", exc)
         raise LlmError(f"LLM stream failed: {exc}") from exc

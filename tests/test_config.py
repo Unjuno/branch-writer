@@ -64,6 +64,12 @@ def test_request_timeout_too_high_is_invalid() -> None:
     assert any("Request Timeout must be between" in error for error in validate_llm_settings(settings))
 
 
+def test_request_timeout_none_is_valid() -> None:
+    settings = LlmSettings(model="model", request_timeout_seconds=None)
+
+    assert validate_llm_settings(settings) == []
+
+
 def test_context_window_too_low_is_invalid() -> None:
     settings = LlmSettings(model="model", context_window=256)
 

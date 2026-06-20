@@ -79,7 +79,7 @@ class LlmSettings:
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
     context_window: int = DEFAULT_CONTEXT_WINDOW
-    request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS
+    request_timeout_seconds: float | None = DEFAULT_REQUEST_TIMEOUT_SECONDS
     system_prompt: str = ""
 
 
@@ -142,11 +142,12 @@ def validate_llm_settings(settings: LlmSettings) -> list[str]:
             f"Max Tokens ({settings.max_tokens}) cannot exceed Context Window ({settings.context_window})"
         )
 
-    if not MIN_REQUEST_TIMEOUT_SECONDS <= settings.request_timeout_seconds <= MAX_REQUEST_TIMEOUT_SECONDS:
-        errors.append(
-            "Request Timeout must be between "
-            f"{MIN_REQUEST_TIMEOUT_SECONDS:.0f} and {MAX_REQUEST_TIMEOUT_SECONDS:.0f} seconds"
-        )
+    if settings.request_timeout_seconds is not None:
+        if not MIN_REQUEST_TIMEOUT_SECONDS <= settings.request_timeout_seconds <= MAX_REQUEST_TIMEOUT_SECONDS:
+            errors.append(
+                "Request Timeout must be between "
+                f"{MIN_REQUEST_TIMEOUT_SECONDS:.0f} and {MAX_REQUEST_TIMEOUT_SECONDS:.0f} seconds"
+            )
 
     return errors
 

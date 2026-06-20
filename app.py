@@ -69,6 +69,7 @@ VALID_INTERVENTION_ACTIONS = {"regenerate_from_here", "insert_and_continue"}
 DEFAULT_RENDER_MESSAGE_LIMIT = 80
 MIN_RENDER_MESSAGE_LIMIT = 10
 MAX_RENDER_MESSAGE_LIMIT = 500
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 180.0
 
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
@@ -280,14 +281,25 @@ def render_sidebar() -> None:
     if settings.max_tokens != derived:
         settings.max_tokens = derived
     st.sidebar.caption(f"出力トークン上限: {settings.max_tokens:,}（コンテキストの約50%）")
-    settings.request_timeout_seconds = st.sidebar.number_input(
-        "リクエストタイムアウト（秒）",
-        min_value=5,
-        max_value=900,
-        value=int(settings.request_timeout_seconds),
-        step=5,
+    no_timeout = st.sidebar.checkbox(
+        "LLM タイムアウトを無効化",
+        value=settings.request_timeout_seconds is None,
         disabled=is_generating,
     )
+    if no_timeout:
+        settings.request_timeout_seconds = None
+        st.sidebar.caption("長時間の思考を邪魔しません。接続断のみ検出します。")
+    else:
+        current_timeout = settings.request_timeout_seconds
+        timeout_value = float(current_timeout if current_timeout is not None else DEFAULT_REQUEST_TIMEOUT_SECONDS)
+        settings.request_timeout_seconds = st.sidebar.number_input(
+            "リクエストタイムアウト（秒）",
+            min_value=5.0,
+            max_value=900.0,
+            value=timeout_value,
+            step=5.0,
+            disabled=is_generating,
+        )
 
     render_context_usage()
 
