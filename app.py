@@ -567,42 +567,14 @@ def render_messages() -> None:
                     elif event_type == "inline_continue":
                         if not generating:
                             sel = int(event.get("selectionStart", 0))
-                            insertion = str(event.get("insertion", ""))
-                            action = "insert_and_continue" if insertion else "regenerate_from_here"
-                            st.session_state["_intervention_event"] = {
-                                "requestId": event.get("requestId") or f"{message.id}:inline:{sel}:{__import__('time').time()}",
-                                "action": action,
-                                "messageId": message.id,
-                                "selectionStart": sel,
-                                "selectionEnd": sel,
-                                "insertion": insertion,
-                            }
+                            current_content = str(event.get("currentContent", ""))
+                            _handle_inline(sel, current_content, message, event)
                             st.rerun()
                     elif event_type == "inline_continue_interrupt":
                         sel = int(event.get("selectionStart", 0))
                         current_content = str(event.get("currentContent", ""))
-                        insertion = str(event.get("insertion", ""))
-                        action = "insert_and_continue" if insertion else "regenerate_from_here"
-                        messages_list: list[ChatMessage] = st.session_state["messages"]
-                        if not current_content and messages_list:
-                            current_content = messages_list[-1].content
-                            logger.info("render_messages: inline_continue_interrupt used message.content as fallback")
-                        if current_content:
-                            sel = max(0, min(sel, len(current_content)))
-                            if messages_list:
-                                latest_msg = messages_list[-1]
-                                if latest_msg.id == message.id:
-                                    latest_msg.content = current_content
-                                    latest_msg.status = "streaming"
-                            st.session_state["_intervention_event"] = {
-                                "requestId": event.get("requestId") or f"{message.id}:interrupt:{sel}:{__import__('time').time()}",
-                                "action": action,
-                                "messageId": message.id,
-                                "selectionStart": sel,
-                                "selectionEnd": sel,
-                                "insertion": insertion,
-                            }
-                            st.rerun()
+                        _handle_inline(sel, current_content, message, event)
+                        st.rerun()
         elif message.role == "assistant" and message.status == "streaming":
             with st.chat_message("assistant"):
                 content = _escape_html(message.content)
@@ -917,6 +889,39 @@ def _event_request_id(event: dict[str, Any]) -> str:
         event.get("action"), event.get("messageId"),
         event.get("selectionStart"), event.get("insertion") or "",
     ))
+
+
+def _handle_inline(
+    sel: int,
+    current_content: str,
+    message: ChatMessage,
+    event: dict[str, Any],
+) -> None:
+    """Handle inline_continue and inline_continue_interrupt.
+
+    Snapshots currentContent into message.content, clamps selectionStart,
+    and creates an _intervention_event with action=regenerate_from_here.
+    """
+    messages_list: list[ChatMessage] = st.session_state["messages"]
+    if not current_content and messages_list:
+        current_content = messages_list[-1].content
+    if not current_content:
+        return
+    sel = max(0, min(sel, len(current_content)))
+    if messages_list:
+        latest_msg = messages_list[-1]
+        if latest_msg.id == message.id:
+            latest_msg.content = current_content
+            latest_msg.status = "streaming"
+    prefix = "inline" if "inline" in (event.get("type") or "") else "interrupt"
+    st.session_state["_intervention_event"] = {
+        "requestId": event.get("requestId") or f"{message.id}:{prefix}:{sel}:{__import__('time').time()}",
+        "action": "regenerate_from_here",
+        "messageId": message.id,
+        "selectionStart": sel,
+        "selectionEnd": sel,
+        "insertion": "",
+    }
 
 
 def handle_intervention_event(event: dict[str, Any]) -> bool:
