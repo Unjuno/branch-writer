@@ -86,13 +86,21 @@ def _inject_custom_css() -> None:
     st.markdown(
         """<style>
 .bw-thinking {
-    display: inline-block;
-    padding: 2px 0;
-    color: var(--text-color);
-    font-size: 0.9rem;
-    font-weight: 400;
+    display: flex; gap: 4px; align-items: center;
+    padding: 8px 0 4px 0; height: 24px;
 }
-
+.bw-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--primary-color, #ff4b4b);
+    animation: bw-bounce 1.4s ease-in-out infinite both;
+}
+.bw-dot-1 { animation-delay: -0.32s; }
+.bw-dot-2 { animation-delay: -0.16s; }
+.bw-dot-3 { }
+@keyframes bw-bounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+}
 .bw-cursor {
     color: var(--primary-color);
 }
@@ -1235,9 +1243,16 @@ def _cancel_cursor_loop() -> None:
     cl["message_id"] = None
 
 
-def _thinking_badge() -> None:
+def _thinking_indicator() -> None:
     if st.session_state["is_generating"]:
-        st.markdown('<span class="bw-thinking">推論中</span>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="bw-thinking">'
+            '<div class="bw-dot bw-dot-1"></div>'
+            '<div class="bw-dot bw-dot-2"></div>'
+            '<div class="bw-dot bw-dot-3"></div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def render_validator_panel() -> None:
@@ -1392,7 +1407,6 @@ def main() -> None:
     _start_streaming_server()
 
     st.title("Branch Writer")
-    _thinking_badge()
 
     _first_launch_wizard()
 
@@ -1417,6 +1431,7 @@ def main() -> None:
             handle_intervention_event(event)
             st.rerun()
 
+    _thinking_indicator()
     prompt = st.chat_input("メッセージを入力", disabled=bool(st.session_state["is_generating"]))
     if prompt:
         handle_user_prompt(prompt)
