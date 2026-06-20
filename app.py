@@ -528,7 +528,7 @@ def render_messages() -> None:
                             else:
                                 expected_key = intervention_state.get("stream_key", "") if intervention_state else ""
                                 actual_key = event.get("streamKey", "")
-                                if expected_key and actual_key and actual_key != expected_key:
+                                if expected_key and actual_key != expected_key:
                                     logger.debug("render_messages: stale streaming_done ignored (streamKey mismatch)")
                                     st.session_state.pop(f"editor-{message.id}", None)
                                 else:
@@ -559,7 +559,7 @@ def render_messages() -> None:
                             else:
                                 expected_key = intervention_state.get("stream_key", "") if intervention_state else ""
                                 actual_key = event.get("streamKey", "")
-                                if expected_key and actual_key and actual_key != expected_key:
+                                if expected_key and actual_key != expected_key:
                                     logger.debug("render_messages: stale streaming_error ignored (streamKey mismatch)")
                                 else:
                                     handle_streaming_error(event)
