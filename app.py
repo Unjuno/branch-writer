@@ -900,7 +900,7 @@ def _handle_inline(
     """Handle inline_continue and inline_continue_interrupt.
 
     Snapshots currentContent into message.content, clamps selectionStart,
-    and creates an _intervention_event with action=regenerate_from_here.
+    and creates an _intervention_event with action/insertion from event.
     """
     messages_list: list[ChatMessage] = st.session_state["messages"]
     if not current_content and messages_list:
@@ -908,6 +908,8 @@ def _handle_inline(
     if not current_content:
         return
     sel = max(0, min(sel, len(current_content)))
+    insertion = str(event.get("insertion", ""))
+    action = "insert_and_continue" if insertion else "regenerate_from_here"
     if messages_list:
         latest_msg = messages_list[-1]
         if latest_msg.id == message.id:
@@ -916,11 +918,11 @@ def _handle_inline(
     prefix = "inline" if "inline" in (event.get("type") or "") else "interrupt"
     st.session_state["_intervention_event"] = {
         "requestId": event.get("requestId") or f"{message.id}:{prefix}:{sel}:{__import__('time').time()}",
-        "action": "regenerate_from_here",
+        "action": action,
         "messageId": message.id,
         "selectionStart": sel,
         "selectionEnd": sel,
-        "insertion": "",
+        "insertion": insertion,
     }
 
 
