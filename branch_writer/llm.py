@@ -9,14 +9,14 @@ from typing import Any
 
 import httpx
 
+logger = logging.getLogger("branch_writer.llm")
+
 from branch_writer.config import (
     LlmSettings,
     normalize_openai_base_url,
     validate_llm_settings,
 )
 from branch_writer.messages import ChatMessage, to_openai_messages
-
-logger = logging.getLogger("branch_writer.llm")
 
 
 class LlmError(RuntimeError):

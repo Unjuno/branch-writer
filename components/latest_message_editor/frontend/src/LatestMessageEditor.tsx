@@ -19,17 +19,33 @@ type StreamlitTheme = { base?: "light" | "dark"; primaryColor?: string; backgrou
 
 function themeVars(theme?: StreamlitTheme): CSSProperties {
   const isDark = theme?.base === "dark"
-  const textColor = theme?.textColor ?? (isDark ? "#fafafa" : "#31333f")
-  const mutedColor = isDark ? "rgba(250,250,250,0.55)" : "rgba(49,51,63,0.55)"
-  const borderColor = isDark ? "rgba(250,250,250,0.12)" : "rgba(49,51,63,0.12)"
+  const textColor = theme?.textColor ?? (isDark ? "#fafafa" : "#262730")
+  const mutedColor = isDark ? "rgba(250,250,250,0.52)" : "rgba(38,39,48,0.55)"
   const primaryColor = theme?.primaryColor ?? "#ff4b4b"
-  const bg = isDark ? "rgba(14,17,23,0.6)" : "rgba(255,255,255,0.85)"
-  const surface = isDark ? "rgba(38,39,48,0.5)" : "rgba(240,242,246,0.6)"
   return {
-    "--bw-text": textColor, "--bw-muted": mutedColor, "--bw-border": borderColor,
-    "--bw-primary": primaryColor, "--bw-bg": bg, "--bw-surface": surface,
+    "--bw-text": textColor, "--bw-muted": mutedColor,
+    "--bw-primary": primaryColor,
     fontFamily: theme?.font,
   } as CSSProperties
+}
+
+function codePointOffsetFromDomOffset(text: string, domOffset: number): number {
+  let count = 0
+  const iter = text[Symbol.iterator]()
+  let pos = 0
+  for (const ch of iter) {
+    if (pos >= domOffset) break
+    pos += ch.length
+    count++
+  }
+  return count
+}
+
+function commonPrefixLength(a: string, b: string): number {
+  const limit = Math.min(a.length, b.length)
+  let i = 0
+  while (i < limit && a[i] === b[i]) i++
+  return i
 }
 
 function LatestMessageEditor(props: ComponentProps) {
@@ -56,19 +72,78 @@ function LatestMessageEditor(props: ComponentProps) {
   const isEditingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const selectionRef = useRef<{ start: number; end: number } | null>(null)
-
-  const cursorLineCount = useMemo(() => Math.max(draftContent.split("\n").length, 1), [draftContent])
+  const isStreamUpdateRef = useRef(false)
+  const typewriterTimerRef = useRef<number | null>(null)
+  const targetContentRef = useRef(initialContent)
 
   useEffect(() => { Streamlit.setFrameHeight() }, [draftContent])
 
   useEffect(() => {
-    if (!isEditingRef.current) {
-      setDraftContent(initialContent)
+    return () => {
+      if (typewriterTimerRef.current !== null) {
+        window.clearInterval(typewriterTimerRef.current)
+        typewriterTimerRef.current = null
+      }
     }
-    isEditingRef.current = false
-  }, [initialContent])
+  }, [])
+
+  const animateToTarget = useCallback((target: string, instant = false) => {
+    targetContentRef.current = target
+    if (typewriterTimerRef.current !== null) {
+      window.clearInterval(typewriterTimerRef.current)
+      typewriterTimerRef.current = null
+    }
+
+    if (instant) {
+      isStreamUpdateRef.current = true
+      setDraftContent(target)
+      return
+    }
+
+    const current = draftContent
+    if (current === target) return
+
+    const prefixLen = commonPrefixLength(current, target)
+    let currentValue = current.slice(0, prefixLen)
+
+    typewriterTimerRef.current = window.setInterval(() => {
+      if (isEditingRef.current) {
+        if (typewriterTimerRef.current !== null) {
+          window.clearInterval(typewriterTimerRef.current)
+          typewriterTimerRef.current = null
+        }
+        return
+      }
+
+      if (currentValue === targetContentRef.current) {
+        if (typewriterTimerRef.current !== null) {
+          window.clearInterval(typewriterTimerRef.current)
+          typewriterTimerRef.current = null
+        }
+        return
+      }
+
+      const nextTarget = targetContentRef.current
+      if (currentValue.length < nextTarget.length) {
+        currentValue = nextTarget.slice(0, currentValue.length + 1)
+      } else {
+        currentValue = nextTarget
+      }
+
+      isStreamUpdateRef.current = true
+      setDraftContent(currentValue)
+    }, 16)
+  }, [draftContent])
+
+  useEffect(() => {
+    if (!isEditingRef.current) {
+      animateToTarget(initialContent, !isStreaming)
+    }
+  }, [initialContent, animateToTarget, isStreaming])
 
   useLayoutEffect(() => {
+    if (!isStreamUpdateRef.current) return
+    isStreamUpdateRef.current = false
     const ta = textareaRef.current
     if (ta && selectionRef.current && document.activeElement === ta) {
       const clamped = {
@@ -80,6 +155,13 @@ function LatestMessageEditor(props: ComponentProps) {
       }
     }
   })
+
+  useLayoutEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    ta.style.height = "0px"
+    ta.style.height = `${ta.scrollHeight}px`
+  }, [draftContent])
 
   const generateStreamId = useCallback(() => `${messageId}:stream:${Date.now()}:${Math.random().toString(36).slice(2)}`, [messageId])
 
@@ -131,11 +213,11 @@ function LatestMessageEditor(props: ComponentProps) {
                 if (nextContent.length >= accumulatedRef.current.length) {
                   accumulatedRef.current = nextContent
                 }
-                if (!isEditingRef.current) setDraftContent(accumulatedRef.current)
+                if (!isEditingRef.current) { animateToTarget(accumulatedRef.current) }
               } else if (eventType === "done") {
                 const finalContent = parsed.fullContent ?? accumulatedRef.current
                 accumulatedRef.current = finalContent
-                if (!isEditingRef.current) setDraftContent(finalContent)
+                if (!isEditingRef.current) { animateToTarget(finalContent, true) }
                 failedStreamKeyRef.current = ""
                 if (!doneSentRef.current && finalContent.length > 0) {
                   doneSentRef.current = true
@@ -237,7 +319,7 @@ function LatestMessageEditor(props: ComponentProps) {
       e.preventDefault()
       const ta = textareaRef.current
       if (!ta) return
-      sendInlineEvent(ta.value, ta.selectionStart)
+      sendInlineEvent(ta.value, codePointOffsetFromDomOffset(ta.value, ta.selectionStart))
     } else if (e.key === "Escape") {
       isEditingRef.current = false
       setDraftContent(accumulatedRef.current)
@@ -249,29 +331,28 @@ function LatestMessageEditor(props: ComponentProps) {
       <textarea
         ref={textareaRef}
         value={draftContent}
-        onChange={e => { isEditingRef.current = true; setDraftContent(e.target.value) }}
+        onChange={e => {
+          isEditingRef.current = true
+          const ta = e.currentTarget
+          selectionRef.current = { start: ta.selectionStart, end: ta.selectionEnd }
+          setDraftContent(ta.value)
+        }}
         onKeyDown={handleKeyDown}
         onSelect={handleSelect}
         onMouseUp={handleSelect}
         onKeyUp={handleSelect}
         onCompositionStart={() => { isComposingRef.current = true }}
         onCompositionEnd={() => { isComposingRef.current = false }}
-        rows={cursorLineCount}
         disabled={disabled}
         style={{
           width: "100%", boxSizing: "border-box", padding: "8px 12px",
           fontSize: "inherit", fontFamily: "inherit", lineHeight: 1.7,
-          color: "var(--bw-text)", background: "var(--bw-surface)",
-          border: "1px solid var(--bw-border)", borderRadius: 4, outline: "none",
-          resize: "none", overflow: "hidden", whiteSpace: "pre-wrap", wordWrap: "break-word",
+          color: "var(--bw-text)", background: "transparent",
+          border: "none", borderRadius: 0, outline: "none", boxShadow: "none",
+          minHeight: "3.5rem", resize: "none", overflow: "hidden",
+          whiteSpace: "pre-wrap", wordWrap: "break-word",
         }}
       />
-      {isStreaming && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: "0.85rem", color: "var(--bw-muted)" }}>
-          <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "var(--bw-primary)", animation: "bw-blink 0.9s step-end infinite" }} />
-          生成中 — Enterで割り込み再生成
-        </div>
-      )}
     </div>
   )
 }

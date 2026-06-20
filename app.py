@@ -899,8 +899,8 @@ def _handle_inline(
 ) -> None:
     """Handle inline_continue and inline_continue_interrupt.
 
-    Snapshots currentContent into message.content, clamps selectionStart,
-    and creates an _intervention_event with action/insertion from event.
+    Passes currentContent to the intervention event for truncation.
+    Does NOT overwrite message.content — that happens in handle_intervention_event.
     """
     messages_list: list[ChatMessage] = st.session_state["messages"]
     if not current_content and messages_list:
@@ -913,9 +913,9 @@ def _handle_inline(
     if messages_list:
         latest_msg = messages_list[-1]
         if latest_msg.id == message.id:
-            latest_msg.content = current_content
             latest_msg.status = "streaming"
     prefix = "inline" if "inline" in (event.get("type") or "") else "interrupt"
+    stream_key = f"{message.id}:{prefix}:{sel}:{__import__('time').time()}"
     st.session_state["_intervention_event"] = {
         "requestId": event.get("requestId") or f"{message.id}:{prefix}:{sel}:{__import__('time').time()}",
         "action": action,
@@ -923,6 +923,8 @@ def _handle_inline(
         "selectionStart": sel,
         "selectionEnd": sel,
         "insertion": insertion,
+        "currentContent": current_content,
+        "streamKey": stream_key,
     }
 
 
@@ -962,9 +964,10 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
 
     insertion = event.get("insertion") or ""
     before_content = latest.content
+    draft_content = event.get("currentContent", before_content)
 
     try:
-        validate_selection_start(before_content, selection_start)
+        validate_selection_start(draft_content, selection_start)
     except (TypeError, ValueError) as exc:
         set_error(st.session_state, str(exc))
         return True
@@ -974,13 +977,14 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
     set_error(st.session_state, None)
     set_generating(st.session_state, True)
 
-    prefix = before_content[:selection_start]
+    prefix = draft_content[:selection_start]
     effective_insertion = insertion if action == "insert_and_continue" else ""
     base_content = prefix + effective_insertion
     latest.content = base_content
     latest.status = "streaming"
 
     frozen = frozen_messages_before_latest(messages)
+    stream_key = event.get("streamKey", "")
     st.session_state["streaming_intervention"] = {
         "base_content": base_content,
         "raw_continuation": "",
@@ -991,6 +995,7 @@ def handle_intervention_event(event: dict[str, Any]) -> bool:
         "action": action,
         "frozen_messages": frozen,
         "assistant_prefix": prefix,
+        "stream_key": stream_key,
     }
 
     st.session_state["kw_filter"]["retry_count"] = 0
